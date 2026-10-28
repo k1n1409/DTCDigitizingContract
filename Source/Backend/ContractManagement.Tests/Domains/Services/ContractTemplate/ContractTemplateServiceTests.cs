@@ -272,9 +272,8 @@ public sealed partial class ContractTemplateServiceTests
     }
 
     [Theory]
-    [InlineData(OtherEmployeeId)]
     [InlineData(InactiveAdminOfficerId)]
-    public async Task NonAdminOfficerOrInactiveActor_IsRejected(int employeeId)
+    public async Task InactiveActor_IsRejected(int employeeId)
     {
         await using var context = CreateContext();
         await SeedEmployeesAsync(context);
@@ -283,6 +282,20 @@ public sealed partial class ContractTemplateServiceTests
             CreateService(context).CreateAsync(
                 CreateRequest("AUTH-FAIL"),
                 employeeId));
+    }
+
+    [Theory]
+    [InlineData(EmployeeType.Manager)]
+    [InlineData(EmployeeType.Accountant)]
+    public async Task AuthorizedRole_CanCreateAndReadTemplate(EmployeeType role)
+    {
+        await using var context = CreateContext();
+        await SeedEmployeesAsync(context);
+        (await context.TblEmployees.SingleAsync(x => x.EmployeeId == OtherEmployeeId)).EmployeeType = (byte)role;
+        await context.SaveChangesAsync();
+        var service = CreateService(context);
+        var template = await service.CreateAsync(CreateRequest("ROLE-TEMPLATE"), OtherEmployeeId);
+        Assert.NotNull(await service.GetAsync(template.TemplateId, OtherEmployeeId));
     }
 
     [Fact]

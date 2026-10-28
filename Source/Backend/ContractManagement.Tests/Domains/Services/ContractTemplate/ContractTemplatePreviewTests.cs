@@ -1401,7 +1401,7 @@ public sealed partial class ContractTemplatePreviewTests
 
     [Theory]
     [InlineData(InactiveAdminOfficerId)]
-    public async Task NonAdminOrInactiveActor_CannotGeneratePreview(int employeeId)
+    public async Task InactiveActor_CannotGeneratePreview(int employeeId)
     {
         await using var context = CreateContext();
         var storage = new TestFileStorage(context);

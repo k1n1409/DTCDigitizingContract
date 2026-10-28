@@ -266,7 +266,7 @@ public sealed class ContractTemplateDocumentUploadServiceTests
 
     [Theory]
     [InlineData(InactiveAdminOfficerId)]
-    public async Task NonAdminOfficer_CannotUpload(int employeeId)
+    public async Task InactiveActor_CannotUpload(int employeeId)
     {
         await using var context = CreateContext();
         await SeedDraftAsync(context);

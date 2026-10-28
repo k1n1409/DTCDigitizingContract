@@ -1,157 +1,188 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { isAxiosError } from "axios";
-import { Plus, Trash2 } from "lucide-react";
-import { Header } from "@/components/ui/custom/header";
+import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Plus, Save, Trash2 } from "lucide-react";
+import { PermissionGuard } from "@/components/auth/permission-guard";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { DecimalInput } from "@/components/ui/custom/decimal-input";
+import { Header } from "@/components/ui/custom/header";
+import { IntegerInput } from "@/components/ui/custom/integer-input";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { IntegerInput } from "@/components/ui/custom/integer-input";
-import { DecimalInput } from "@/components/ui/custom/decimal-input";
-import { PermissionGuard } from "@/components/auth/permission-guard";
-import { RBAC_PERMISSIONS } from "@/lib/rbac";
-import { formatCurrency } from "@/lib/format-currency";
-import { customerApi, type CustomerResponse } from "@/services/customers-api";
-import { productApi, type ProductResponse } from "@/services/catalog/products-api";
-import { quotationApi } from "@/services/quotations-api";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "@/components/ui/sonner";
+import { getApiErrorMessage } from "@/lib/api-error";
+import { formatCurrency } from "@/lib/format-currency";
+import { RBAC_PERMISSIONS } from "@/lib/rbac";
+import { catalogPickerApi, type CatalogPickerItem } from "@/services/catalog/picker-api";
+import { ContractItemType } from "@/services/contract-api";
+import { customerApi, CustomerStatus, type CustomerLookupResponse } from "@/services/customers-api";
+import { quotationApi } from "@/services/quotations-api";
 
 type Line = { productId: number; productName: string; quantity: number; unitPrice: number };
-const selectClass = "h-10 w-full rounded-md border border-input bg-background px-3 text-sm";
 
 function CreateQuotationContent() {
   const router = useRouter();
-  const [customers, setCustomers] = useState<CustomerResponse[]>([]);
-  const [products, setProducts] = useState<ProductResponse[]>([]);
-  const [customerQuery, setCustomerQuery] = useState("");
-  const [productQuery, setProductQuery] = useState("");
-  const [customerPage, setCustomerPage] = useState(1);
-  const [productPage, setProductPage] = useState(1);
-  const [customerPages, setCustomerPages] = useState(1);
-  const [productPages, setProductPages] = useState(1);
+  const saveLock = useRef(false);
+  const [customers, setCustomers] = useState<CustomerLookupResponse[]>([]);
   const [customerId, setCustomerId] = useState("");
-  const [customerLabel, setCustomerLabel] = useState("");
-  const [productId, setProductId] = useState("");
+  const [customersLoading, setCustomersLoading] = useState(true);
+  const [customerError, setCustomerError] = useState<string | null>(null);
+  const [products, setProducts] = useState<CatalogPickerItem[]>([]);
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [productsLoading, setProductsLoading] = useState(true);
+  const [productError, setProductError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
   const [lines, setLines] = useState<Line[]>([]);
   const [saving, setSaving] = useState(false);
-  const [customerLoading, setCustomerLoading] = useState(true);
-  const [productLoading, setProductLoading] = useState(true);
-  const [lookupError, setLookupError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    const timer = setTimeout(async () => {
-      setCustomerLoading(true);
-      try {
-        const result = await customerApi.getList({ page: customerPage, pageSize: 20, status: 1, keyword: customerQuery });
-        if (!cancelled) { setCustomers(result.items); setCustomerPages(result.totalPages); }
-      } catch { if (!cancelled) setLookupError("Không thể tải khách hàng. Kiểm tra quyền truy cập và thử tải lại trang."); }
-      finally { if (!cancelled) setCustomerLoading(false); }
-    }, 250);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [customerQuery, customerPage]);
+    setCustomersLoading(true);
+    setCustomerError(null);
+    void customerApi.lookup().then((items) => {
+      if (!cancelled) setCustomers(items.filter((item) => item.status === CustomerStatus.Active));
+    }).catch((cause) => {
+      if (!cancelled) setCustomerError(getApiErrorMessage(cause, "Không thể tải khách hàng."));
+    }).finally(() => {
+      if (!cancelled) setCustomersLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [reload]);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
+    setProductsLoading(true);
+    setProductError(null);
     const timer = setTimeout(async () => {
-      setProductLoading(true);
       try {
-        const result = await productApi.getList({ page: productPage, pageSize: 20, status: 1, keyword: productQuery });
-        if (!cancelled) { setProducts(result.items); setProductPages(result.totalPages); }
-      } catch { if (!cancelled) setLookupError("Không thể tải sản phẩm. Kiểm tra quyền truy cập và thử tải lại trang."); }
-      finally { if (!cancelled) setProductLoading(false); }
-    }, 250);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [productQuery, productPage]);
+        const result = await catalogPickerApi.search({
+          page, pageSize: 10, keyword: query.trim(), itemType: ContractItemType.Product,
+        }, controller.signal);
+        if (controller.signal.aborted) return;
+        const lastPage = Math.max(1, result.totalPages);
+        setTotalPages(lastPage);
+        if (page > lastPage) { setPage(lastPage); return; }
+        setProducts(result.items);
+      } catch (cause) {
+        if (!controller.signal.aborted) {
+          setProducts([]);
+          setProductError(getApiErrorMessage(cause, "Không thể tải sản phẩm."));
+        }
+      } finally {
+        if (!controller.signal.aborted) setProductsLoading(false);
+      }
+    }, 300);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [page, query, reload]);
 
-  const updateLine = (id: number, changes: Partial<Line>) => setLines((previous) => previous.map((line) => line.productId === id ? { ...line, ...changes } : line));
   const total = lines.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0);
-  const addProduct = () => {
-    const product = products.find((entry) => entry.productId === Number(productId));
-    if (!product) return;
-    if (lines.some((line) => line.productId === product.productId)) { toast.info("Sản phẩm đã có trong báo giá."); return; }
-    setLines((previous) => [...previous, { productId: product.productId, productName: product.productName || product.productCode || `SP-${product.productId}`, quantity: 1, unitPrice: product.productPrice || 0 }]);
-    setProductId("");
+  const updateLine = (productId: number, patch: Partial<Line>) => {
+    setLines((current) => current.map((line) => line.productId === productId ? { ...line, ...patch } : line));
   };
-  const submit = async (event: React.FormEvent) => {
+  const addProduct = (product: CatalogPickerItem) => {
+    setLines((current) => current.some((line) => line.productId === product.sourceId) ? current : [
+      ...current,
+      { productId: product.sourceId, productName: product.name || "Sản phẩm chưa có tên", quantity: 1, unitPrice: product.price ?? 0 },
+    ]);
+  };
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (saving) return;
-    if (!customerId || !lines.length || lines.some((line) => !Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 2147483647 || !Number.isFinite(line.unitPrice) || line.unitPrice < 0)) {
-      setError("Chọn khách hàng, thêm ít nhất một sản phẩm và nhập số lượng, đơn giá hợp lệ."); return;
+    if (saveLock.current) return;
+    if (!customers.some((item) => item.customerId === Number(customerId))) {
+      setError("Vui lòng chọn khách hàng đang hoạt động."); return;
+    }
+    if (!lines.length || lines.some((line) =>
+      !Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 2_147_483_647 ||
+      !Number.isFinite(line.unitPrice) || line.unitPrice < 0 || line.unitPrice !== Number(line.unitPrice.toFixed(2)))) {
+      setError("Thêm ít nhất một sản phẩm. Số lượng phải là số nguyên dương; đơn giá không âm và có tối đa 2 chữ số thập phân."); return;
     }
     if (!Number.isFinite(total) || total >= 1e16) {
-      setError("Tổng giá trị báo giá vượt giới hạn lưu trữ. Vui lòng giảm số lượng hoặc đơn giá."); return;
+      setError("Tổng giá trị vượt giới hạn lưu trữ. Vui lòng giảm số lượng hoặc đơn giá."); return;
     }
-    setSaving(true); setError(null);
+    saveLock.current = true;
+    setSaving(true);
+    setError(null);
     try {
-      const result = await quotationApi.create({ customerId: Number(customerId), quotationItems: lines.map(({ productId, quantity, unitPrice }) => ({ productId, quantity, unitPrice })) });
-      toast.success("Tạo báo giá thành công");
-      router.push(`/quotations/${result.quotationId}`);
+      const result = await quotationApi.create({
+        customerId: Number(customerId),
+        quotationItems: lines.map(({ productId, quantity, unitPrice }) => ({ productId, quantity, unitPrice })),
+      });
+      toast.success("Đã tạo báo giá.");
+      router.replace(`/quotations/${result.quotationId}`);
     } catch (cause) {
-      setError(isAxiosError(cause) && typeof cause.response?.data?.message === "string" ? cause.response.data.message : "Không thể tạo báo giá. Vui lòng thử lại.");
+      setError(getApiErrorMessage(cause, "Không thể tạo báo giá."));
+      saveLock.current = false;
       setSaving(false);
     }
   };
 
-  return <><Header /><main className="grow overflow-y-auto p-4 lg:p-10 space-y-6">
-    <Link href="/quotations" className="text-sm text-primary">← Quay lại danh sách báo giá</Link>
-    <h1 className="text-2xl font-bold">Tạo báo giá mới</h1>
-    <p className="text-sm text-muted-foreground">Mã, ngày và trạng thái bản nháp được tạo tự động khi lưu.</p>
-    {lookupError && <p role="alert" className="text-destructive">{lookupError}</p>}
-    <form onSubmit={submit} className="space-y-6">
-      <fieldset disabled={saving} className="space-y-6 disabled:opacity-70">
-        <section className="rounded-xl border bg-card p-5 space-y-3">
-          <Label htmlFor="customer-search">Khách hàng *</Label>
-          <Input id="customer-search" placeholder="Tìm khách hàng..." value={customerQuery} onChange={(event) => { setCustomerQuery(event.target.value); setCustomerPage(1); }} />
-          <select id="quotation-customer" aria-label="Chọn khách hàng" className={selectClass} value={customerId} disabled={customerLoading} onChange={(event) => {
-            setCustomerId(event.target.value);
-            const customer = customers.find((entry) => entry.customerId === Number(event.target.value));
-            setCustomerLabel(customer?.customerCompany || customer?.customerFullName || "");
-          }}>
-            <option value="">{customerLoading ? "Đang tải..." : "Chọn khách hàng"}</option>
-            {customerId && !customers.some((customer) => customer.customerId === Number(customerId)) && <option value={customerId}>{customerLabel}</option>}
-            {customers.map((customer) => <option key={customer.customerId} value={customer.customerId}>{customer.customerCode} · {customer.customerCompany || customer.customerFullName}</option>)}
-          </select>
-          {!customerLoading && !customers.length && <p className="text-sm text-muted-foreground">Không tìm thấy khách hàng đang hoạt động.</p>}
-          <PickerPagination page={customerPage} pages={customerPages} loading={customerLoading} onChange={setCustomerPage} />
-        </section>
-        <section className="rounded-xl border bg-card p-5 space-y-4">
-          <h2 className="font-semibold">Sản phẩm báo giá</h2>
-          <Input aria-label="Tìm sản phẩm" placeholder="Tìm tên hoặc mã sản phẩm..." value={productQuery} onChange={(event) => { setProductQuery(event.target.value); setProductPage(1); setProductId(""); }} />
-          <div className="flex flex-col sm:flex-row gap-3">
-            <select aria-label="Chọn sản phẩm" className={selectClass} value={productId} disabled={productLoading} onChange={(event) => setProductId(event.target.value)}>
-              <option value="">{productLoading ? "Đang tải..." : "Chọn sản phẩm"}</option>
-              {products.map((product) => <option key={product.productId} value={product.productId}>{product.productCode} · {product.productName}</option>)}
-            </select>
-            <Button type="button" disabled={!productId || productLoading} onClick={addProduct}><Plus className="mr-2 h-4 w-4" />Thêm sản phẩm</Button>
-          </div>
-          {!productLoading && !products.length && <p className="text-sm text-muted-foreground">Không tìm thấy sản phẩm đang kinh doanh.</p>}
-          <PickerPagination page={productPage} pages={productPages} loading={productLoading} onChange={(page) => { setProductPage(page); setProductId(""); }} />
-          {!lines.length && <p className="py-6 text-center text-muted-foreground">Chưa chọn sản phẩm.</p>}
-          {lines.map((line) => <div key={line.productId} className="rounded-xl border p-4 space-y-3">
-            <div className="flex justify-between items-center gap-3"><h3 className="font-medium">{line.productName}</h3><Button type="button" variant="ghost" size="icon" aria-label={`Xóa ${line.productName}`} onClick={() => setLines((previous) => previous.filter((entry) => entry.productId !== line.productId))}><Trash2 className="h-4 w-4 text-destructive" /></Button></div>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div className="space-y-2"><Label htmlFor={`quantity-${line.productId}`}>Số lượng *</Label><IntegerInput id={`quantity-${line.productId}`} value={line.quantity} max={2147483647} onValueChange={(quantity) => updateLine(line.productId, { quantity })} /></div>
-              <div className="space-y-2"><Label htmlFor={`price-${line.productId}`}>Đơn giá *</Label><DecimalInput id={`price-${line.productId}`} value={line.unitPrice} onValueChange={(unitPrice) => updateLine(line.productId, { unitPrice: Math.round(unitPrice * 100) / 100 })} /><p className="text-xs text-muted-foreground">Đơn giá làm tròn đến 2 chữ số thập phân.</p></div>
-              <div className="space-y-2"><p className="text-sm">Thành tiền</p><p className="font-semibold text-primary">{formatCurrency(line.quantity * line.unitPrice)}</p></div>
-            </div>
-          </div>)}
-          <p className="text-right text-lg font-semibold">Tổng cộng: {formatCurrency(total)}</p>
-        </section>
-      </fieldset>
-      {error && <p role="alert" className="text-destructive">{error}</p>}
-      <div className="flex justify-end gap-3"><Button type="button" variant="outline" disabled={saving} onClick={() => router.push("/quotations")}>Hủy</Button><Button type="submit" disabled={saving || !customerId || !lines.length}>{saving ? "Đang tạo..." : "Tạo báo giá"}</Button></div>
-    </form>
-  </main></>;
-}
-
-function PickerPagination({ page, pages, loading, onChange }: { page: number; pages: number; loading: boolean; onChange: (page: number) => void }) {
-  if (pages <= 1) return null;
-  return <div className="flex items-center justify-end gap-3 text-sm"><Button type="button" variant="outline" size="sm" disabled={loading || page <= 1} onClick={() => onChange(page - 1)}>Trước</Button><span>Trang {page}/{pages}</span><Button type="button" variant="outline" size="sm" disabled={loading || page >= pages} onClick={() => onChange(page + 1)}>Sau</Button></div>;
+  return <>
+    <Header />
+    <main className="grow overflow-y-auto p-2 lg:p-10 space-y-6">
+      <Button asChild variant="ghost" size="sm"><Link href="/quotations"><ArrowLeft className="size-4" /> Quay lại báo giá</Link></Button>
+      <div><h1 className="text-2xl font-bold">Tạo báo giá mới</h1><p className="mt-1 text-sm text-muted-foreground">Mã báo giá, ngày tạo và trạng thái bản nháp được hệ thống tự sinh.</p></div>
+      <form onSubmit={submit} className="space-y-6">
+        <fieldset disabled={saving} className="space-y-6 disabled:opacity-70">
+          <Card>
+            <CardHeader><CardTitle>Khách hàng</CardTitle></CardHeader>
+            <CardContent className="space-y-2">
+              <Label htmlFor="quotation-customer">Khách hàng <span className="text-red-500">*</span></Label>
+              <Select value={customerId} onValueChange={setCustomerId} disabled={customersLoading}>
+                <SelectTrigger id="quotation-customer" className="w-full"><SelectValue placeholder={customersLoading ? "Đang tải khách hàng..." : "Chọn khách hàng"} /></SelectTrigger>
+                <SelectContent>{customers.map((customer) => <SelectItem key={customer.customerId} value={String(customer.customerId)}>{customer.customerCompany || customer.customerFullName || "Khách hàng chưa có tên"}{customer.customerCode ? ` · ${customer.customerCode}` : ""}</SelectItem>)}</SelectContent>
+              </Select>
+              {customerError && <Alert variant="destructive"><AlertDescription>{customerError}</AlertDescription></Alert>}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>Chọn sản phẩm</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              <Input aria-label="Tìm sản phẩm" placeholder="Tìm theo mã hoặc tên sản phẩm..." value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} />
+              {productsLoading ? <p role="status" className="py-4 text-sm text-muted-foreground">Đang tải sản phẩm...</p> : productError ? <Alert variant="destructive"><AlertDescription>{productError}</AlertDescription></Alert> : !products.length ? <p className="py-4 text-sm text-muted-foreground">Không tìm thấy sản phẩm đang hoạt động.</p> : <div className="max-h-72 overflow-y-auto space-y-2">
+                {products.map((product) => {
+                  const added = lines.some((line) => line.productId === product.sourceId);
+                  return <div key={product.sourceId} className="flex items-center justify-between gap-3 rounded-lg border p-3">
+                    <div className="min-w-0"><p className="font-medium break-words">{product.name || "Sản phẩm chưa có tên"}</p><p className="text-sm text-muted-foreground">{formatCurrency(product.price)}</p></div>
+                    <Button type="button" variant="outline" size="sm" disabled={added} onClick={() => addProduct(product)}><Plus className="size-4" />{added ? "Đã chọn" : "Thêm"}</Button>
+                  </div>;
+                })}
+              </div>}
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+                <Button type="button" variant="ghost" size="sm" onClick={() => setReload((value) => value + 1)}>Tải lại danh mục</Button>
+                <div className="flex items-center gap-2"><Button type="button" variant="outline" size="sm" disabled={productsLoading || page <= 1} onClick={() => setPage((value) => value - 1)}><ChevronLeft className="size-4" />Trước</Button><span className="text-sm">Trang {page}/{totalPages}</span><Button type="button" variant="outline" size="sm" disabled={productsLoading || page >= totalPages} onClick={() => setPage((value) => value + 1)}>Sau<ChevronRight className="size-4" /></Button></div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>Sản phẩm đã chọn ({lines.length})</CardTitle></CardHeader>
+            <CardContent>
+              <Table><TableHeader><TableRow><TableHead>Sản phẩm</TableHead><TableHead>Số lượng</TableHead><TableHead>Đơn giá (VND)</TableHead><TableHead className="text-right">Thành tiền</TableHead><TableHead><span className="sr-only">Thao tác</span></TableHead></TableRow></TableHeader>
+                <TableBody>{!lines.length && <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground">Chưa có sản phẩm.</TableCell></TableRow>}{lines.map((line) => <TableRow key={line.productId}>
+                  <TableCell className="min-w-48 whitespace-normal font-medium">{line.productName}</TableCell>
+                  <TableCell className="min-w-36"><IntegerInput aria-label={`Số lượng ${line.productName}`} value={line.quantity} min={1} max={2_147_483_647} onValueChange={(quantity) => updateLine(line.productId, { quantity })} /></TableCell>
+                  <TableCell className="min-w-44"><DecimalInput aria-label={`Đơn giá ${line.productName}`} value={line.unitPrice} min={0} onValueChange={(unitPrice) => updateLine(line.productId, { unitPrice })} /></TableCell>
+                  <TableCell className="text-right">{formatCurrency(line.quantity * line.unitPrice)}</TableCell>
+                  <TableCell><Button type="button" variant="ghost" size="icon" className="text-destructive" aria-label={`Bỏ ${line.productName}`} onClick={() => setLines((current) => current.filter((item) => item.productId !== line.productId))}><Trash2 className="size-4" /></Button></TableCell>
+                </TableRow>)}</TableBody>
+              </Table>
+              <p className="mt-4 text-right text-lg font-semibold">Tổng giá trị: {formatCurrency(total)}</p>
+            </CardContent>
+          </Card>
+          {error && <Alert variant="destructive"><AlertDescription role="alert">{error}</AlertDescription></Alert>}
+          <div className="flex justify-end"><Button type="submit" disabled={saving || customersLoading || !customerId || !lines.length}>{saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}Tạo báo giá</Button></div>
+        </fieldset>
+      </form>
+    </main>
+  </>;
 }
 
 export default function CreateQuotationPage() {
