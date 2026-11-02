@@ -29,6 +29,7 @@ public sealed class DocumentLibraryController(DbDtctechContext db, ICurrentTenan
         public int Revision { get; set; } public DateTime UpdatedAtUtc { get; set; }
         public Guid? FolderId { get; set; } public bool IsStarred { get; set; } public int MetadataRevision { get; set; }
         public bool CanDelete { get; set; }
+        public bool IsSharedTemplate { get; set; }
     }
     public sealed class MetadataRequest
     {
@@ -38,7 +39,7 @@ public sealed class DocumentLibraryController(DbDtctechContext db, ICurrentTenan
     public sealed class FolderRequest { public string Name { get; set; } = ""; }
     private async Task<bool> Readable(string kind, Guid id, CancellationToken ct) => kind == "imported"
         ? await db.Set<ImportedContractDocument>().AnyAsync(x => x.Id == id && x.TenantId == TenantId && x.EmployeeId == Actor && !x.IsArchived, ct)
-        : kind is "template" or "editor" && await db.Set<ContractEditorDocument>().AnyAsync(x => x.Id == id && x.TenantId == TenantId && !x.IsArchived && (kind == "template" ? x.IsTemplate : !x.IsTemplate && x.EmployeeId == Actor), ct);
+        : kind is "template" or "editor" && await db.Set<ContractEditorDocument>().AnyAsync(x => x.Id == id && x.TenantId == TenantId && !x.IsArchived && (kind == "template" ? x.IsTemplate && (x.IsSharedTemplate || x.EmployeeId == Actor) : !x.IsTemplate && x.EmployeeId == Actor), ct);
 
     [HttpGet]
     public async Task<IActionResult> List(string? kind = null, string? keyword = null, Guid? folderId = null, bool starred = false, int page = 1, CancellationToken ct = default, bool trash = false)
@@ -52,10 +53,10 @@ public sealed class DocumentLibraryController(DbDtctechContext db, ICurrentTenan
                       join m in metadata.Where(x => x.Kind == "imported") on d.Id equals m.DocumentId into joined
                       from m in joined.DefaultIfEmpty()
                       select new Row { Id = d.Id, Kind = "imported", Name = m != null && m.DisplayName != null ? m.DisplayName : d.Name, DisplayName = m == null ? null : m.DisplayName, OriginalName = d.Name, Revision = d.Revision, UpdatedAtUtc = d.UpdatedAtUtc, FolderId = m == null ? null : m.FolderId, IsStarred = m != null && m.IsStarred, MetadataRevision = m == null ? 0 : m.Revision };
-        var editors = from d in db.Set<ContractEditorDocument>().AsNoTracking().Where(x => x.TenantId == TenantId && x.IsArchived == trash && (x.EmployeeId == Actor || x.IsTemplate) && (!trash || !x.IsTemplate || manageTemplates))
+        var editors = from d in db.Set<ContractEditorDocument>().AsNoTracking().Where(x => x.TenantId == TenantId && x.IsArchived == trash && (x.EmployeeId == Actor || (x.IsTemplate && x.IsSharedTemplate)) && (!trash || !x.IsTemplate || !x.IsSharedTemplate || manageTemplates))
                       join m in metadata on new { d.Id, Kind = d.IsTemplate ? "template" : "editor" } equals new { Id = m.DocumentId, m.Kind } into joined
                       from m in joined.DefaultIfEmpty()
-                      select new Row { Id = d.Id, Kind = d.IsTemplate ? "template" : "editor", Name = m != null && m.DisplayName != null ? m.DisplayName : d.Title, DisplayName = m == null ? null : m.DisplayName, OriginalName = d.Title, Revision = d.Revision, UpdatedAtUtc = d.UpdatedAtUtc, FolderId = m == null ? null : m.FolderId, IsStarred = m != null && m.IsStarred, MetadataRevision = m == null ? 0 : m.Revision };
+                      select new Row { Id = d.Id, Kind = d.IsTemplate ? "template" : "editor", IsSharedTemplate = d.IsTemplate && d.IsSharedTemplate, Name = m != null && m.DisplayName != null ? m.DisplayName : d.Title, DisplayName = m == null ? null : m.DisplayName, OriginalName = d.Title, Revision = d.Revision, UpdatedAtUtc = d.UpdatedAtUtc, FolderId = m == null ? null : m.FolderId, IsStarred = m != null && m.IsStarred, MetadataRevision = m == null ? 0 : m.Revision };
         IQueryable<Row> Filter(IQueryable<Row> q) {
             if (!string.IsNullOrEmpty(keyword)) q = q.Where(x => x.Name.Contains(keyword));
             if (folderId.HasValue) q = q.Where(x => x.FolderId == folderId);
@@ -70,7 +71,7 @@ public sealed class DocumentLibraryController(DbDtctechContext db, ICurrentTenan
         var first = await imports.OrderByDescending(x => x.UpdatedAtUtc).ThenBy(x => x.Id).Take(take).ToListAsync(ct);
         var second = await editors.OrderByDescending(x => x.UpdatedAtUtc).ThenBy(x => x.Id).Take(take).ToListAsync(ct);
         var items = first.Concat(second).OrderByDescending(x => x.UpdatedAtUtc).ThenBy(x => x.Id).Skip((page - 1) * 12).Take(12).ToList();
-        foreach (var item in items) item.CanDelete = item.Kind != "template" || manageTemplates;
+        foreach (var item in items) item.CanDelete = item.Kind != "template" || !item.IsSharedTemplate || manageTemplates;
         return Ok(ApiResponse<object>.Ok(new { items, totalCount = count, totalPages = Math.Max(1, (int)Math.Ceiling(count / 12d)) }));
     }
 
@@ -94,9 +95,9 @@ public sealed class DocumentLibraryController(DbDtctechContext db, ICurrentTenan
         }
         else if (kind is "editor" or "template")
         {
-            var doc = await db.Set<ContractEditorDocument>().SingleOrDefaultAsync(x => x.Id == id && x.TenantId == TenantId && (kind == "template" ? x.IsTemplate : !x.IsTemplate && x.EmployeeId == Actor), ct);
+            var doc = await db.Set<ContractEditorDocument>().SingleOrDefaultAsync(x => x.Id == id && x.TenantId == TenantId && (kind == "template" ? x.IsTemplate && (x.IsSharedTemplate || x.EmployeeId == Actor) : !x.IsTemplate && x.EmployeeId == Actor), ct);
             if (doc is null) return NotFound();
-            if (kind == "template" && !await CanManageTemplates(ct)) return StatusCode(403, ApiResponse<object>.Fail("Bạn không có quyền xóa/khôi phục mẫu dùng chung."));
+            if (kind == "template" && doc.IsSharedTemplate && !await CanManageTemplates(ct)) return StatusCode(403, ApiResponse<object>.Fail("Bạn không có quyền xóa/khôi phục mẫu dùng chung."));
             if (doc.Revision != expectedRevision || doc.IsArchived == archived) return Conflict(ApiResponse<object>.Fail("Tài liệu đã thay đổi. Làm mới thư viện trước khi tiếp tục."));
             var current = await db.Set<ContractEditorRevision>().AsNoTracking().SingleOrDefaultAsync(x => x.DocumentId == id && x.Revision == doc.Revision, ct);
             if (current is null) return Conflict(ApiResponse<object>.Fail("Thiếu snapshot của tài liệu. Liên hệ quản trị."));
@@ -159,7 +160,20 @@ public sealed class DocumentLibraryController(DbDtctechContext db, ICurrentTenan
             if (kind == "imported") return await new ImportedContractsController(db, tenant, pdf) { ControllerContext = ControllerContext }.Export(id, "pdf", version, ct);
             var snapshot = await db.Set<ContractEditorRevision>().AsNoTracking().SingleOrDefaultAsync(x => x.DocumentId == id && x.Revision == version, ct);
             if (snapshot is null) return NotFound();
-            return await new ContractDocumentEditorController(pdf) { ControllerContext = ControllerContext }.Export("pdf", new() { Content = snapshot.Content, Title = snapshot.Title, Bindings = JsonSerializer.Deserialize<Dictionary<string, string>>(snapshot.Bindings)!, AllowUnboundPreview = true }, ct);
+            return await new ContractDocumentEditorController(pdf, db, tenant) { ControllerContext = ControllerContext }.Export("pdf", new() { Content = snapshot.Content, Title = snapshot.Title, Bindings = JsonSerializer.Deserialize<Dictionary<string, string>>(snapshot.Bindings)!, AllowUnboundPreview = true }, ct);
         }, ct);
+    }
+
+    [HttpGet("{kind}/{id:guid}/export/{format}")]
+    public async Task<IActionResult> Export(string kind, Guid id, string format, int revision, CancellationToken ct = default)
+    {
+        if (format is not ("docx" or "pdf") || revision < 1) return BadRequest();
+        if (!await Readable(kind, id, ct)) return NotFound();
+        Response.Headers.CacheControl = "no-store";
+        Response.Headers["X-Document-Revision"] = revision.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (kind == "imported") return await new ImportedContractsController(db, tenant, pdf) { ControllerContext = ControllerContext }.Export(id, format, revision, ct);
+        var snapshot = await db.Set<ContractEditorRevision>().AsNoTracking().SingleOrDefaultAsync(x => x.DocumentId == id && x.Revision == revision, ct);
+        if (snapshot is null) return NotFound();
+        return await new ContractDocumentEditorController(pdf, db, tenant) { ControllerContext = ControllerContext }.Export(format, new() { Content = snapshot.Content, Title = snapshot.Title, Bindings = JsonSerializer.Deserialize<Dictionary<string, string>>(snapshot.Bindings)! }, ct);
     }
 }

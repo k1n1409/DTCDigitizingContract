@@ -4,10 +4,17 @@ import { CONTRACT_SNIPPETS } from "@/lib/contract-editor-snippets";
 const labels = Object.fromEntries(CONTRACT_SNIPPETS.flatMap(s => s.fields.map(f => [f.key, f.label])));
 const aliases: Record<string, string> = { COMPANY: "Tên công ty", CONTACT_NAME: "Người liên hệ", CONTACT_TITLE: "Chức vụ", CONTACT_PHONE: "Điện thoại", TAX_CODE: "Mã số thuế", BANK_NAME: "Ngân hàng", BANK_ACCOUNT_NUMBER: "Số tài khoản", ADDRESS: "Địa chỉ", PHONE: "Điện thoại", EMAIL: "Email", CODE: "Mã", FULL_NAME: "Họ và tên", EFFECTIVE_DATE: "Ngày hiệu lực", EXPIRE_DATE: "Ngày hết hạn", CONTRACT_DATE: "Ngày lập hợp đồng", CONTRACT_CURRENCY: "Đồng tiền", CONTRACT_TOTAL_AMOUNT: "Tổng giá trị hợp đồng" };
 export function editorFieldLabel(key: string): string {
+  const baseKey = key.replace(/_\d+$/, "");
   const prefix = key.startsWith("CUSTOMER_") ? "Khách hàng" : key.startsWith("PROVIDER_") ? "Nhà cung cấp" : key.startsWith("EMPLOYEE_") ? "Nhân viên" : "";
   const tail = prefix ? key.slice(key.indexOf("_") + 1) : key;
-  const label = labels[key] || aliases[tail] || aliases[key];
+  const label = labels[key] || labels[baseKey] || aliases[tail.replace(/_\d+$/, "")] || aliases[key];
   return label ? `${label}${prefix ? ` · ${prefix}` : ""}` : `Thông tin ${key.toLocaleLowerCase().replaceAll("_", " ")}`;
+}
+
+/** A missing-field editing session keeps its original membership and order until refreshed. */
+export function filterEditorFieldKeys(keys: string[], snapshot: string[] | null, query: string, activeKey: string, bindings: Record<string, string>) {
+  const available = new Set(keys), needle = query.toLocaleLowerCase("vi-VN");
+  return (snapshot ?? keys).filter(key => available.has(key) && (key === activeKey || `${editorFieldLabel(key)} ${bindings[key] || ""}`.toLocaleLowerCase("vi-VN").includes(needle)));
 }
 
 /** Presentation-only atoms. Persistence/export still use the original token keys. */

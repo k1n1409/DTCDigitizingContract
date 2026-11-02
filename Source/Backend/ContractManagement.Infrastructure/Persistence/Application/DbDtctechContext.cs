@@ -203,6 +203,12 @@ public partial class DbDtctechContext : DbContext
             entity.Property(x => x.Title).HasMaxLength(100);
             entity.HasOne<ContractEditorDocument>().WithMany().HasForeignKey(x => x.DocumentId).OnDelete(DeleteBehavior.Cascade);
         });
+        modelBuilder.Entity<ContractEditorSourceAsset>(entity => {
+            entity.ToTable("tbl_ContractEditorSourceAsset");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Sha256).HasMaxLength(64);
+            entity.HasIndex(x => new { x.TenantId, x.EmployeeId });
+        });
         modelBuilder.Entity<TblContractApprovalRequest>(entity =>
         {
             entity.HasKey(x => x.ApprovalRequestId);

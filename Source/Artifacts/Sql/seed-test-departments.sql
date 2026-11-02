@@ -23,8 +23,8 @@ END;
 
 IF OBJECT_ID(N'dbo.__EFMigrationsHistory', N'U') IS NULL
     THROW 50011, N'Chưa có schema migration. Hãy provision tenant và chạy migration trước khi seed.', 1;
-IF NOT EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = N'20261028092153_DocumentLibraryTrash')
-    THROW 50012, N'Tenant chưa có migration RetireHandoverTemplates. Hãy cập nhật schema trước khi seed.', 1;
+IF NOT EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = N'20261102090713_EditorDocxLayoutPreservation')
+    THROW 50012, N'Tenant chưa có migration EditorDocxLayoutPreservation. Hãy cập nhật schema trước khi seed.', 1;
 
 DECLARE @Departments table
 (

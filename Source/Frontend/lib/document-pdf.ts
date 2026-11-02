@@ -19,10 +19,10 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
-export async function documentPdf(kind: LibraryKind, id: string, revision: number, owner: string, signal: AbortSignal, purpose: "preview" | "thumbnail" = "preview") {
+export async function documentPdf(kind: LibraryKind, id: string, revision: number, owner: string, signal: AbortSignal, purpose: "preview" | "thumbnail" = "preview", variant: "reviewed" | "original" = "reviewed") {
   signal.throwIfAborted();
   if (cacheOwner !== owner) { buffers.clear(); bytesUsed = 0; cacheOwner = owner; for (const task of pending.values()) task.controller.abort(); pending.clear(); }
-  const key = `${owner}:${kind}:${id}:${revision}`;
+  const key = `${owner}:${kind}:${id}:${revision}:${variant}`;
   const cached = buffers.get(key); if (cached) return cached.slice(0);
   let task = pending.get(key);
   if (!task) {
@@ -35,7 +35,8 @@ export async function documentPdf(kind: LibraryKind, id: string, revision: numbe
         running++;
         void (async () => {
           controller.signal.throwIfAborted();
-          const data = await axiosClient.get<unknown, ArrayBuffer>(`/api/document-library/${kind}/${id}/preview`, { params: { revision }, responseType: "arraybuffer", signal: controller.signal });
+          const url = variant === "original" && kind === "imported" ? `/api/imported-contracts/${id}/original-preview` : `/api/document-library/${kind}/${id}/preview`;
+          const data = await axiosClient.get<unknown, ArrayBuffer>(url, { params: { revision }, responseType: "arraybuffer", signal: controller.signal });
           if (new TextDecoder().decode(data.slice(0, 5)) !== "%PDF-") throw new Error("Phản hồi preview không phải PDF hợp lệ.");
           if (!controller.signal.aborted && cacheOwner === owner) {
             while (buffers.size && bytesUsed + data.byteLength > 32 * 1024 * 1024) {

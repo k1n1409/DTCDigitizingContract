@@ -45,7 +45,7 @@ export function PdfThumbnail({ kind, id, revision, name }: { kind: LibraryKind; 
   return <div ref={root} className="flex h-full w-full items-center justify-center overflow-hidden bg-white">{failed ? <span className="flex h-full items-center gap-1 p-2 text-[10px] text-muted-foreground"><FileWarning className="size-4" />Chưa có preview</span> : <canvas ref={canvas} aria-label={`Trang đầu ${name}`} className="h-full w-auto max-w-full object-contain" />}</div>;
 }
 
-export function DocumentPdfPreview({ kind, id, revision }: { kind: LibraryKind; id: string; revision: number }) {
+export function DocumentPdfPreview({ kind, id, revision, original = false }: { kind: LibraryKind; id: string; revision: number; original?: boolean }) {
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null); const [page, setPage] = useState(1);
   const [zoom, setZoom] = useState(100); const [error, setError] = useState(""); const [loading, setLoading] = useState(true); const [retry, setRetry] = useState(0);
   const canvas = useRef<HTMLCanvasElement>(null); const user = useAuthStore(s => s.user); const owner = `${user?.tenantId}:${user?.employeeId}`;
@@ -53,12 +53,12 @@ export function DocumentPdfPreview({ kind, id, revision }: { kind: LibraryKind; 
     const abort = new AbortController(); let task: Awaited<ReturnType<typeof openPdf>> | undefined;
     const run = async () => {
       setLoading(true); setError(""); setDocument(null); setPage(1);
-      try { const bytes = await documentPdf(kind, id, revision, owner, abort.signal); if (abort.signal.aborted) return; task = await openPdf(bytes); const pdf = await task.promise; if (!abort.signal.aborted) setDocument(pdf); }
+      try { const bytes = await documentPdf(kind, id, revision, owner, abort.signal, "preview", original ? "original" : "reviewed"); if (abort.signal.aborted) return; task = await openPdf(bytes); const pdf = await task.promise; if (!abort.signal.aborted) setDocument(pdf); }
       catch { if (!abort.signal.aborted) setError("Không dựng được bản PDF. Kiểm tra LibreOffice/quyền truy cập rồi thử lại."); }
       finally { if (!abort.signal.aborted) setLoading(false); }
     };
     void run(); return () => { abort.abort(); void task?.destroy(); };
-  }, [kind, id, revision, owner, retry]);
+  }, [kind, id, revision, owner, retry, original]);
   useEffect(() => {
     if (!document) return; let cancelled = false; let render: ReturnType<Awaited<ReturnType<PDFDocumentProxy["getPage"]>>["render"]> | undefined;
     void (async () => {

@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { FileText, Plus, Save, Download, Search, Trash2, Library, Undo2, Redo2, FileDown, Loader2 } from "lucide-react";
+import { FileText, Plus, Save, Download, Search, Trash2, Library, Undo2, Redo2, FileDown, Loader2, Database } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { DocumentLibraryPanel } from "@/components/contracts/document-library-workspace";
+import { DocumentWorkspaceStatus } from "@/components/contracts/document-workspace-status";
+import { WorkspaceExpandButton } from "@/components/contracts/document-workspace-view";
+import { TemplatePrivacyOptions } from "@/components/contracts/template-privacy-options";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { editorFieldLabel } from "@/lib/editor-smart-fields";
@@ -36,7 +39,7 @@ function paragraphs(content: string) {
   const doc = parseContractRichText(content);
   const result: ContractRichTextParagraph[] = [];
   for (const block of doc.blocks) {
-    if (block.type === "paragraph") result.push(block);
+    if (block.type === "paragraph") { if (!block.locked) result.push(block); }
     else for (const row of block.rows) for (const cell of row.cells) result.push(...cell.paragraphs);
   }
   return { doc, result };
@@ -46,6 +49,7 @@ function EditorContent() {
   const router = useRouter();
   const [libraryOpen, setLibraryOpen] = useState(true);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const [selectedField, setSelectedField] = useState<{ key: string; detach?: (replacement?: string) => void } | null>(null);
   const [fieldValue, setFieldValue] = useState("");
   const user = useAuthStore(s => s.user);
@@ -61,6 +65,8 @@ function EditorContent() {
   const [bindings, setBindings] = useState<Record<string, string>>({});
   const [draftDialog, setDraftDialog] = useState<"list" | "history" | "templates" | null>(null);
   const [templateConfirm, setTemplateConfirm] = useState(false);
+  const [sharedTemplate, setSharedTemplate] = useState(false);
+  const [templateAcknowledged, setTemplateAcknowledged] = useState(false);
   const [sideTab, setSideTab] = useState<"blocks" | "data">("data");
   const [preview, setPreview] = useState(false);
   const [pdfMode, setPdfMode] = useState(false);
@@ -152,42 +158,54 @@ function EditorContent() {
     } catch (error) { toast.error(getApiErrorMessage(error, "Không nhập được DOCX.")); }
     finally { setBusy(false); }
   };
-  const download = async (format: "docx" | "pdf") => {
+  const download = async (format: "docx" | "pdf", previewOnly = false) => {
     const missing = editorFieldKeys(content).filter(key => !bindings[key]?.trim());
     if (missing.length) { toast.error(`Cần bổ sung ${missing.length} thông tin trước khi xuất.`); selectField(missing[0]); return; }
+    const popup = previewOnly ? window.open("about:blank", "_blank") : null;
+    if (previewOnly && !popup) { toast.error("Trình duyệt chặn tab xem trước. Hãy cho phép mở tab mới."); return; }
+    if (popup) popup.opener = null;
     setBusy(true);
     try {
-      const blob = await axiosClient.post<unknown, Blob>(`/api/contract-document-editor/export/${format}`, { content, title, bindings }, { responseType: "blob" });
-      const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${title.replace(/[\\/:*?"<>|]/g, "-") || "Hop dong"}.${format}`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 30000);
-    } catch (error) { toast.error(await getBlobApiErrorMessage(error, "Không xuất được tài liệu. Với PDF, kiểm tra cấu hình LibreOffice của môi trường.")); }
+      const saved = await server.save();
+      if (!saved) { popup?.close(); toast.error("Chưa lưu được bản đang sửa. Không xuất phiên bản cũ; hãy thử lưu lại."); return; }
+      const blob = await axiosClient.get<unknown, Blob>(`/api/document-library/${saved.isTemplate ? "template" : "editor"}/${saved.id}/export/${format}`, { params: { revision: saved.revision }, responseType: "blob" });
+      const url = URL.createObjectURL(new Blob([blob], { type: format === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }));
+      if (previewOnly) {
+        if (popup && !popup.closed) popup.location.replace(url);
+        else { URL.revokeObjectURL(url); return; }
+      } else { const a = document.createElement("a"); a.href = url; a.download = `${title.replace(/[\\/:*?"<>|]/g, "-") || "Hop dong"}.${format}`; a.click(); }
+      setTimeout(() => URL.revokeObjectURL(url), 300000);
+    } catch (error) { popup?.close(); toast.error(await getBlobApiErrorMessage(error, "Không xuất được tài liệu. Với PDF, kiểm tra cấu hình LibreOffice của môi trường.")); }
     finally { setBusy(false); }
   };
   return <main className="document-workspace-ui flex min-h-0 flex-1 flex-col bg-muted/40" onDragOver={e => { if (e.dataTransfer.types.includes("Files")) e.preventDefault(); }} onDrop={e => { if (!e.dataTransfer.types.includes("Files")) return; e.preventDefault(); if (locked) return; const files = [...e.dataTransfer.files]; if (files.length !== 1) { toast.error("Kéo một tệp DOCX mỗi lần."); return; } confirmReplace(() => void importFile(files[0])); }}>
-    <header className="flex h-16 shrink-0 items-center gap-3 border-b border-border bg-primary px-4">
+    <header inert={busy} className="flex h-16 shrink-0 items-center gap-3 border-b border-border bg-primary px-4">
       <div className="flex w-48 shrink-0 items-center gap-2 xl:w-64"><FileText className="size-5 shrink-0 text-primary-foreground" /><Input className="min-w-0 bg-background text-foreground" showControls={false} aria-label="Tên tài liệu" value={title} maxLength={100} onChange={e => { setTitle(e.target.value); setDirty(true); }} /></div>
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto py-2 [&_button]:h-9">
+      <WorkspaceExpandButton beforeExpand={() => setLibraryOpen(false)} />
       <Button variant="outline" disabled={locked} onClick={() => void server.save()}><Save className="size-4 mr-2" />{server.saving ? "Đang lưu..." : "Lưu server"}</Button>
       <Button size="icon" variant="outline" title="Hoàn tác (Ctrl+Z)" aria-label="Hoàn tác văn bản" disabled={locked || preview || pdfMode || !historyState.canUndo} onClick={() => setHistoryRequest({ id: crypto.randomUUID(), action: "undo" })}><Undo2 className="size-4" /></Button>
       <Button size="icon" variant="outline" title="Làm lại (Ctrl+Shift+Z)" aria-label="Làm lại văn bản" disabled={locked || preview || pdfMode || !historyState.canRedo} onClick={() => setHistoryRequest({ id: crypto.randomUUID(), action: "redo" })}><Redo2 className="size-4" /></Button>
       <Button variant="outline" onClick={() => setLibraryOpen(v => !v)}><Library className="mr-2 size-4" />Thư viện</Button>
       <Button variant="outline" disabled={locked} onClick={() => confirmReplace(() => { server.detach(); applySnapshot({ title: "Hợp đồng mới", content: "", bindings: {} }); setDirty(false); })}><Plus className="mr-2 size-4" />Tài liệu trắng</Button>
-      {canManageTemplates && <Button variant="outline" disabled={locked || !content} onClick={() => setTemplateConfirm(true)}>Lưu thành mẫu mới</Button>}
+      <Button variant="outline" disabled={locked || !content} onClick={() => { setSharedTemplate(false); setTemplateAcknowledged(false); setTemplateConfirm(true); }}>Lưu thành mẫu mới</Button>
       <Button variant="outline" onClick={() => { setPdfMode(false); setPreview(value => !value); }}>{preview ? "Tiếp tục soạn" : "Xem dữ liệu đã điền"}</Button>
       <Button variant="outline" disabled={!server.identity || locked || (dirty && !pdfMode)} onClick={() => setPdfMode(value => !value)}>{pdfMode ? "Quay lại soạn thảo" : "Bản PDF thực tế"}</Button>
-      <Button variant="outline" disabled={busy} onClick={() => void download("docx")}><Download className="size-4 mr-2" />Word</Button>
+      <Button variant="outline" title="Xem trước bản Word dưới dạng PDF trong tab mới, không tải file" disabled={locked || !content} onClick={() => void download("pdf", true)}><FileText className="size-4 mr-2" />Xem Word</Button>
+      <Button size="icon" variant="outline" title="Tải Word (.docx)" aria-label="Tải Word" disabled={locked || !content} onClick={() => void download("docx")}><Download className="size-4" /></Button>
       </div>
       <Button variant="secondary" className="h-9 shrink-0 gap-2 rounded-lg bg-white px-4 font-semibold text-primary shadow-sm hover:bg-white/90" disabled={busy || server.loading || !content} onClick={() => void download("pdf")}>{busy ? <Loader2 className="size-4 animate-spin" /> : <FileDown className="size-4" />}{busy ? "Đang xuất..." : "Xuất PDF"}</Button>
     </header>
-    <div className="border-b bg-card px-4 py-2 text-xs text-muted-foreground" role="status">{server.error ? <span className="text-destructive">{server.error} Tự lưu đã tạm dừng; mở lại bản mới nhất nếu có xung đột hoặc bấm Lưu server để thử lại.</span> : server.saving ? "Đang lưu trên server..." : dirty ? "Tự lưu sau khi ngừng nhập 2 giây." : server.identity ? `Đã lưu trên server · phiên bản ${server.identity.revision}` : "Tài liệu mới, chưa lưu trên server."}</div>
-    {server.identity?.isTemplate && <p className="border-b bg-primary/5 px-4 py-2 text-sm text-primary">Đang sửa mẫu dùng chung. Lưu server sẽ tạo phiên bản mới của mẫu; không sửa các tài liệu đã tạo từ mẫu trước đó.</p>}
+    <DocumentWorkspaceStatus state={server.error ? "error" : server.saving ? "saving" : dirty || !server.identity ? "unsaved" : "saved"}>{server.error ? <><span>{server.error} Thay đổi chưa được lưu lên server.</span><Button size="sm" variant="outline" disabled={locked} onClick={() => void server.save()}>Thử lưu lại</Button></> : server.saving ? "Đang lưu — bạn có thể tiếp tục soạn thảo." : dirty ? "Có thay đổi mới · Tự lưu sau 2 giây ngừng nhập." : server.identity ? `Đã lưu trên server · phiên bản ${server.identity.revision}` : "Tài liệu mới · Bắt đầu soạn hoặc chọn một mẫu trong thư viện."}</DocumentWorkspaceStatus>
+    {server.identity?.isTemplate && <p className="border-b bg-primary/5 px-4 py-2 text-sm text-primary">Đang sửa {server.identity.isSharedTemplate ? "mẫu dùng chung trong tenant" : "mẫu cá nhân — chỉ bạn truy cập được"}. Lưu server tạo phiên bản mới; không sửa tài liệu đã tạo từ mẫu.</p>}
     <input hidden type="file" accept=".docx" ref={uploadRef} onChange={e => { void importFile(e.target.files?.[0]); e.target.value = ""; }} />
     <div className="relative flex min-h-0 flex-1 flex-col overflow-auto lg:flex-row">
       {libraryOpen && <DocumentLibraryPanel activeId={server.identity?.id} refreshKey={`${server.identity?.id}-${server.identity?.revision}`} disabled={locked || dirty} onClose={() => setLibraryOpen(false)} onOpen={id => confirmReplace(() => router.push(`/contract-import?document=${encodeURIComponent(id)}`))} onOpenEditor={id => confirmReplace(() => void server.open(id))} onUseTemplate={id => confirmReplace(() => void server.open(id, undefined, true))} onDeleted={(_, id) => { if (server.identity?.id === id) { server.detach(); applySnapshot({ title: "Hợp đồng mới", content: "", bindings: {} }); setDirty(false); } }} />}
       <Dialog open={toolsOpen} onOpenChange={setToolsOpen}><DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl"><DialogHeader><DialogTitle>{sideTab === "blocks" ? "Bố cục tài liệu" : "Thông tin cần điền"}</DialogTitle><DialogDescription>Điền một lần, các vị trí liên kết trong tài liệu sẽ cập nhật cùng nhau. Không thay đổi danh mục khách hàng.</DialogDescription></DialogHeader>
-      <div className="space-y-4" inert={locked}>
+      <div className="space-y-4" inert={busy || server.loading}>
         <p className="text-xs text-muted-foreground">Tài liệu độc lập, chưa tạo/cập nhật hồ sơ hợp đồng hay thay bản đã duyệt/ký.</p>
         {sideTab === "blocks" && <EditorBlocksPanel content={content} onChange={update} />}
-        <div hidden={sideTab !== "data"}><EditorDataPanel key={`${server.identity?.id || "new"}-${documentEpoch}`} content={content} bindings={bindings} onChange={value => { setBindings(value); setDirty(true); }} onInsert={key => { const doc = parseContractRichText(content); doc.blocks.push({ type: "paragraph", runs: [{ text: `{{${key}}}` }] }); update(serializeContractRichText(doc)); }} /></div>
+        <div hidden={sideTab !== "data"}><EditorDataPanel mode="fields" initialOnlyMissing key={documentEpoch} content={content} bindings={bindings} onChange={value => { setBindings(value); setDirty(true); }} onInsert={key => { const doc = parseContractRichText(content); doc.blocks.push({ type: "paragraph", runs: [{ text: `{{${key}}}` }] }); update(serializeContractRichText(doc)); }} /></div>
         <details><summary className="cursor-pointer text-sm text-muted-foreground">Công cụ nâng cao · Tài liệu cũ</summary>
         <Button className="w-full" variant="ghost" disabled={locked} onClick={() => confirmReplace(() => { try { const raw = localStorage.getItem(draftKey); if (!raw) { toast.info("Chưa có nháp trên trình duyệt này."); return; } const draft = JSON.parse(raw); if (typeof draft.content !== "string" || typeof draft.title !== "string") throw new Error(); applySnapshot(draft); server.detach(); setDirty(true); } catch { toast.error("Không đọc được nháp đã lưu."); } })}>Nhập nháp cũ từ trình duyệt</Button>
         <Button className="w-full" disabled={busy} onClick={detect}><Search className="size-4 mr-2" />Nhận diện thông tin trong văn bản</Button>
@@ -200,9 +218,10 @@ function EditorContent() {
         </details>
       </div></DialogContent></Dialog>
       <section className="min-h-0 min-w-0 flex-1 overflow-auto p-4 lg:p-8">
+        <div className="mx-auto mb-4 flex max-w-[210mm] justify-end"><Button disabled={locked} onClick={() => { setPdfMode(false); setSourcesOpen(true); }}><Database className="mr-2 size-4" />Liên kết dữ liệu thật</Button></div>
         {pdfMode && server.identity ? <div className="flex h-full min-h-[400px] flex-col"><DocumentPdfPreview kind={server.identity.isTemplate ? "template" : "editor"} id={server.identity.id} revision={server.identity.revision} /></div> : <>
-        {warning && <p role="status" className="mx-auto mb-4 max-w-4xl rounded-lg border bg-amber-50 p-3 text-sm text-amber-950">{warning}</p>}
-        <div className="mx-auto mb-4 max-w-[210mm] rounded-lg border bg-card p-3 text-sm"><p>Bấm vào thông tin được đánh dấu để điền hoặc sửa. Các vị trí cùng liên kết tự cập nhật.</p>{missingFields.length > 0 && <div className="mt-2 flex flex-wrap gap-2"><span className="py-1 text-muted-foreground">Còn {missingFields.length} thông tin:</span>{missingFields.slice(0, 6).map(key => <Button key={key} size="sm" variant="outline" disabled={locked} onClick={() => selectField(key)}>{editorFieldLabel(key)}</Button>)}{missingFields.length > 6 && <Button size="sm" variant="ghost" onClick={() => { setSideTab("data"); setToolsOpen(true); }}>Xem tất cả</Button>}</div>}</div>
+        {(warning || parseContractRichText(content).preservation) && <p role="status" className="mx-auto mb-4 max-w-4xl rounded-lg border bg-amber-50 p-3 text-sm text-amber-950">{warning || "Tài liệu giữ Word gốc: ảnh, header/footer, lề trang và khối phức tạp được giữ khi xuất. Khối nét đứt chỉ xem; dùng PDF thực tế để đối chiếu bố cục."}</p>}
+        <div className="mx-auto mb-4 max-w-[210mm] space-y-3 rounded-2xl border bg-card p-4 text-sm shadow-sm"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">Thông tin trong tài liệu</h2><p className="mt-1 text-muted-foreground">Bấm nhãn màu xanh trên trang để điền. Các vị trí liên kết sẽ cập nhật cùng nhau.</p></div>{missingFields.length > 0 && <span className="shrink-0 rounded-full bg-amber-100 px-3 py-1 font-medium text-amber-950 dark:bg-amber-950 dark:text-amber-200">Còn {missingFields.length} thông tin chưa điền</span>}</div>{missingFields.length > 0 ? <><div className="flex flex-wrap gap-2">{missingFields.slice(0, 4).map(key => <Button key={key} className="max-w-full truncate rounded-full" size="sm" variant="outline" disabled={locked} onClick={() => selectField(key)}>{editorFieldLabel(key)}</Button>)}</div><Button disabled={locked} className="h-auto min-h-10 max-w-full whitespace-normal rounded-xl px-4 py-2 font-semibold shadow-sm" onClick={() => { setSideTab("data"); setToolsOpen(true); }}>Xem tất cả thông tin chưa điền</Button></> : <p className="rounded-xl bg-primary/5 px-3 py-2 text-primary">{editorFieldKeys(content).length ? "Đã điền đủ các trường đang dùng. Hãy kiểm tra bản PDF trước khi xuất." : "Thêm nội dung từ bảng bên phải hoặc bắt đầu gõ trên trang bên dưới."}</p>}</div>
         <div data-document-content inert={server.loading || busy} className="mx-auto min-h-[297mm] w-full max-w-[210mm] rounded-xl bg-card p-4 shadow-lg lg:p-8">{preview ? <ContractRichTextContent value={resolveEditorFields(content, Object.fromEntries(editorFieldKeys(content).map(key => [key, bindings[key]?.trim() ? bindings[key] : `［${editorFieldLabel(key)}］`])))} /> : <ContractRichTextEditor key={documentEpoch}
           historyRequest={historyRequest}
           onHistoryStateChange={setHistoryState}
@@ -210,13 +229,14 @@ function EditorContent() {
           smartFields={{ bindings, onSelect: selectField }} insertRequest={insertRequest} onInsertHandled={id => setInsertRequest(current => current?.id === id ? undefined : current)} className="[&_.tiptap]:!h-auto [&_.tiptap]:!min-h-[1000px] [&_.tiptap]:!overflow-visible [&_.tiptap]:py-8 [&_.tiptap]:px-5" value={content} onChange={update} ariaLabel="Nội dung tài liệu hợp đồng" placeholder="Bắt đầu soạn thảo hợp đồng hoặc nhập DOCX..." />}</div>
         </>}
       </section>
-      <EditorSnippetsPanel key={`${server.identity?.id || "new"}-${documentEpoch}`} bindings={bindings} onBindingsChange={values => { setBindings(current => ({ ...current, ...values })); setDirty(true); }} disabled={locked || preview || pdfMode} onInsert={content => setInsertRequest({ id: crypto.randomUUID(), content })} />
+      <EditorSnippetsPanel key={documentEpoch} bindings={bindings} onBindingsChange={values => { setBindings(current => ({ ...current, ...values })); setDirty(true); }} disabled={locked || preview || pdfMode} onInsert={content => setInsertRequest({ id: crypto.randomUUID(), content })} />
     </div>
+    <Dialog open={sourcesOpen} onOpenChange={setSourcesOpen}><DialogContent className="document-workspace-ui max-h-[85vh] overflow-y-auto sm:max-w-xl"><DialogHeader><DialogTitle>Chọn nguồn dữ liệu</DialogTitle><DialogDescription>Lấy thông tin khách hàng, nhân viên, sản phẩm hoặc hồ sơ pháp lý công ty vào tài liệu đang soạn.</DialogDescription></DialogHeader><div inert={busy || server.loading}><EditorDataPanel mode="sources" content={content} bindings={bindings} onChange={value => { setBindings(value); setDirty(true); }} onInsert={() => {}} /></div></DialogContent></Dialog>
     <Dialog open={!!selectedField} onOpenChange={open => !open && setSelectedField(null)}><DialogContent><DialogHeader><DialogTitle>{selectedField ? editorFieldLabel(selectedField.key) : "Điền thông tin"}</DialogTitle><DialogDescription>Áp dụng cho mọi vị trí cùng liên kết trong tài liệu này. Không sửa dữ liệu khách hàng gốc.</DialogDescription></DialogHeader><Label htmlFor="smart-field-value">Nội dung</Label><Textarea id="smart-field-value" value={fieldValue} maxLength={10000} rows={4} onChange={e => setFieldValue(e.target.value)} /><div className="flex flex-wrap justify-end gap-2">{selectedField?.detach && <Button variant="outline" disabled={locked} onClick={() => { selectedField.detach?.(fieldValue); setSelectedField(null); }}>Chuyển vị trí này thành văn bản thường</Button>}<Button disabled={locked} onClick={() => { if (selectedField) { setBindings(current => ({ ...current, [selectedField.key]: fieldValue })); setDirty(true); } setSelectedField(null); }}>Áp dụng</Button></div></DialogContent></Dialog>
     <ConfirmDialog isOpen={pending !== null} onClose={() => setPending(null)} onConfirm={() => { const action = pending; setPending(null); action?.(); }} title="Thay nội dung đang soạn?" description="Có thay đổi chưa lưu. Hãy lưu nháp hoặc xuất Word trước nếu muốn giữ nội dung hiện tại." confirmText="Tiếp tục" />
     <EditorDraftsDialog key={draftDialog || "closed"} mode={draftDialog} documentId={server.identity?.id} canManage={canManageTemplates} onClose={() => setDraftDialog(null)} onOpen={(id, revision) => { setDraftDialog(null); confirmReplace(() => void server.open(id, revision)); }} onUseTemplate={id => { setDraftDialog(null); confirmReplace(() => void server.open(id, undefined, true)); }} />
     <ConfirmDialog isOpen={deleteReviewField !== null} onClose={() => setDeleteReviewField(null)} title="Xóa giá trị khỏi tài liệu?" description="Chỉ xóa giá trị tại đoạn được nhận diện trong tài liệu đang soạn. Thao tác này không xóa hồ sơ khách hàng." variant="destructive" confirmText="Xóa giá trị" onConfirm={() => { if (deleteReviewField !== null) applyField(deleteReviewField, true); setDeleteReviewField(null); }} />
-    <ConfirmDialog isOpen={templateConfirm} onClose={() => setTemplateConfirm(false)} title="Lưu thành mẫu dùng chung?" description="Mẫu sẽ hiển thị cho người dùng trong tenant. Các giá trị liên kết được xóa nhưng văn bản nhập trực tiếp vẫn giữ nguyên: hãy loại bỏ thông tin riêng của khách hàng khỏi nội dung trước khi lưu. Bản mẫu editor này không tự phát hành thành mẫu nghiệp vụ trong module Mẫu hợp đồng." confirmText="Tạo mẫu văn bản" onConfirm={() => { setTemplateConfirm(false); void server.saveAsTemplate().then(ok => { if (ok) { setSideTab("blocks"); toast.success("Đã tạo mẫu trong thư viện."); } }); }} />
+    <ConfirmDialog isOpen={templateConfirm} onClose={() => setTemplateConfirm(false)} title="Lưu thành mẫu văn bản" description={<div className="space-y-4"><p>Giá trị liên kết được xóa để điền lại khi dùng mẫu. Văn bản gõ trực tiếp vẫn được giữ nguyên.</p><TemplatePrivacyOptions shared={sharedTemplate} onChange={setSharedTemplate} canShare={canManageTemplates} acknowledged={templateAcknowledged} onAcknowledge={setTemplateAcknowledged} /></div>} confirmDisabled={!templateAcknowledged} confirmText="Tạo mẫu văn bản" onConfirm={() => { if (!templateAcknowledged) return; setTemplateConfirm(false); void server.saveAsTemplate(sharedTemplate).then(ok => { if (ok) { setSideTab("blocks"); toast.success("Đã tạo mẫu trong thư viện."); } }); }} />
   </main>;
 }
 export default function ContractEditorPage() { return <PermissionGuard permission={RBAC_PERMISSIONS.contractCreate}><EditorContent /></PermissionGuard>; }

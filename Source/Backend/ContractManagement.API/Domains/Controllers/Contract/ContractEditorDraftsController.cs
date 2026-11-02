@@ -10,12 +10,13 @@ using ContractManagement.Infrastructure.Persistence.Application;
 using ContractManagement.Infrastructure.Persistence.Application.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using ContractManagement.API.Domains.Services.Contract;
 
 namespace ContractManagement.API.Domains.Controllers.Contract;
 
 [ApiController, Route("api/contract-editor-drafts")]
 [SessionAuthorize(RbacPermissions.ContractCreate)]
-public sealed class ContractEditorDraftsController(DbDtctechContext db, ICurrentTenant tenant) : ControllerBase
+public sealed class ContractEditorDraftsController(DbDtctechContext db, ICurrentTenant tenant, ContractManagement.Domains.Interfaces.ContractTemplate.IContractTemplatePdfRenderer? pdf = null) : ControllerBase
 {
     public sealed class SaveRequest
     {
@@ -24,18 +25,31 @@ public sealed class ContractEditorDraftsController(DbDtctechContext db, ICurrent
         public int ExpectedRevision { get; set; }
         public Guid? ClientDocumentId { get; set; }
         public bool IsTemplate { get; set; }
+        public bool IsSharedTemplate { get; set; } = true;
         public Dictionary<string, string> Bindings { get; set; } = [];
     }
     private int Actor => HttpContext.Session.GetInt32("EmployeeId") ?? throw new UnauthorizedAccessException();
-    private IQueryable<ContractEditorDocument> Readable => db.Set<ContractEditorDocument>().Where(x => x.TenantId == tenant.GetRequiredTenant().TenantId && !x.IsArchived && (x.EmployeeId == Actor || x.IsTemplate));
+    private IQueryable<ContractEditorDocument> Readable => db.Set<ContractEditorDocument>().Where(x => x.TenantId == tenant.GetRequiredTenant().TenantId && !x.IsArchived && (x.EmployeeId == Actor || (x.IsTemplate && x.IsSharedTemplate)));
     private async Task<bool> CanManageTemplates(CancellationToken ct) => EmployeePermissionCatalog.HasPermission(await db.TblEmployees.AsNoTracking().Where(x => x.EmployeeId == Actor && x.Status == 1).Select(x => x.EmployeeType).SingleOrDefaultAsync(ct), RbacPermissions.TemplateManage);
 
     [HttpGet("binding-values")]
     public async Task<IActionResult> BindingValues(string source, int id, CancellationToken ct)
     {
+        Response.Headers.CacheControl = "no-store";
         Dictionary<string, string?> values;
         switch (source)
         {
+            case "provider":
+                var profile = await db.TblTenantLegalProfiles.AsNoTracking().SingleOrDefaultAsync(x => x.TenantLegalProfileId == 1, ct);
+                if (profile is null) return NotFound(ApiResponse<object>.Fail("Chưa có hồ sơ pháp lý công ty trong tenant. Hãy cập nhật Hồ sơ pháp lý trước."));
+                values = new() {
+                    ["PROVIDER_NAME"] = profile.LegalEntityName, ["PROVIDER_TAX_CODE"] = profile.TaxCode,
+                    ["PROVIDER_ADDRESS"] = profile.Address, ["PROVIDER_REPRESENTATIVE"] = profile.RepresentativeName,
+                    ["PROVIDER_TITLE"] = profile.RepresentativeTitle, ["PROVIDER_PHONE"] = profile.PhoneNumber,
+                    ["PROVIDER_FAX"] = profile.FaxNumber, ["PROVIDER_BANK_ACCOUNT_NUMBER"] = profile.BankAccountNumber,
+                    ["PROVIDER_BANK_NAME"] = profile.BankName, ["SOURCE_PROVIDER_ID"] = "1"
+                };
+                break;
             case "customer":
                 var customer = await db.TblCustomers.AsNoTracking().SingleOrDefaultAsync(x => x.CustomerId == id && x.Status == 1, ct);
                 if (customer is null) return NotFound();
@@ -74,7 +88,8 @@ public sealed class ContractEditorDraftsController(DbDtctechContext db, ICurrent
         if (doc is null) return NotFound();
         var item = await db.Set<ContractEditorRevision>().AsNoTracking().SingleOrDefaultAsync(x => x.DocumentId == id && x.Revision == (revision ?? doc.Revision), ct);
         if (item is null) return NotFound();
-        return Ok(ApiResponse<object>.Ok(new { doc.Id, doc.IsTemplate, revision = item.Revision, currentRevision = doc.Revision, item.Title, item.Content, bindings = JsonSerializer.Deserialize<Dictionary<string, string>>(item.Bindings), item.CreatedAtUtc }));
+        Response.Headers.CacheControl = "no-store";
+        return Ok(ApiResponse<object>.Ok(new { doc.Id, doc.IsTemplate, doc.IsSharedTemplate, revision = item.Revision, currentRevision = doc.Revision, item.Title, item.Content, bindings = JsonSerializer.Deserialize<Dictionary<string, string>>(item.Bindings), item.CreatedAtUtc }));
     }
 
     [HttpGet("{id:guid}/history")]
@@ -98,11 +113,15 @@ public sealed class ContractEditorDraftsController(DbDtctechContext db, ICurrent
     {
         if (string.IsNullOrWhiteSpace(request.Title) || (request.Content != "" && !ContractTermRichText.TryParse(request.Content, out _)) || request.Bindings is null || request.Bindings.Count > 200 || request.Bindings.Any(x => !Regex.IsMatch(x.Key, "^[A-Z][A-Z0-9_]{0,79}$") || x.Value is null || x.Value.Length > 10000))
             return BadRequest(ApiResponse<object>.Fail("Nội dung hoặc trường dữ liệu không hợp lệ."));
+        ContractTermRichText.TryParse(request.Content, out var parsed);
+        if (parsed.Preservation is { } preserved && !await EditorDocxSourceAccess.CanReadAsync(db, tenant.GetRequiredTenant().TenantId, Actor, preserved.SourceId, preserved.Sha256, ct)) return NotFound(ApiResponse<object>.Fail("Không có quyền truy cập Word gốc của tài liệu này."));
         var doc = id.HasValue ? await Readable.SingleOrDefaultAsync(x => x.Id == id, ct) : null;
         if (id.HasValue && doc is null) return NotFound();
+        if (doc is not null && doc.SourceAssetId != parsed.Preservation?.SourceId) return BadRequest(ApiResponse<object>.Fail("Nguồn Word gốc không được thay đổi hoặc bỏ khỏi tài liệu đã lưu. Hãy nhập thành tài liệu mới."));
         if (doc is { IsTemplate: false } && doc.EmployeeId != Actor) return NotFound();
-        if ((doc?.IsTemplate == true || request.IsTemplate) && !await CanManageTemplates(ct)) return StatusCode(403, ApiResponse<object>.Fail("Bạn không có quyền quản lý mẫu văn bản."));
+        if ((doc is { IsTemplate: true, IsSharedTemplate: true } || (request.IsTemplate && request.IsSharedTemplate)) && !await CanManageTemplates(ct)) return StatusCode(403, ApiResponse<object>.Fail("Bạn không có quyền quản lý mẫu dùng chung."));
         if (doc is not null && doc.IsTemplate != request.IsTemplate) return BadRequest(ApiResponse<object>.Fail("Không đổi loại tài liệu trực tiếp. Hãy lưu thành mẫu mới hoặc tạo bản sao từ mẫu."));
+        if (doc is { IsTemplate: true } && doc.IsSharedTemplate != request.IsSharedTemplate) return BadRequest(ApiResponse<object>.Fail("Không đổi phạm vi của mẫu đã lưu. Hãy lưu thành mẫu mới để tránh chia sẻ nhầm dữ liệu."));
         if (!id.HasValue && request.ClientDocumentId.HasValue)
         {
             var existing = await db.Set<ContractEditorDocument>().AsNoTracking().SingleOrDefaultAsync(x => x.Id == request.ClientDocumentId.Value, ct);
@@ -111,23 +130,37 @@ public sealed class ContractEditorDraftsController(DbDtctechContext db, ICurrent
                 if (existing.EmployeeId != Actor || existing.TenantId != tenant.GetRequiredTenant().TenantId) return NotFound();
                 var last = await db.Set<ContractEditorRevision>().AsNoTracking().SingleAsync(x => x.DocumentId == existing.Id && x.Revision == existing.Revision, ct);
                 var previousBindings = JsonSerializer.Deserialize<Dictionary<string, string>>(last.Bindings)!;
-                if (existing.IsArchived || existing.IsTemplate != request.IsTemplate || last.Title != request.Title.Trim() || last.Content != request.Content || previousBindings.Count != request.Bindings.Count || previousBindings.Any(x => !request.Bindings.TryGetValue(x.Key, out var value) || value != x.Value))
+                if (existing.IsArchived || existing.IsTemplate != request.IsTemplate || (existing.IsTemplate && existing.IsSharedTemplate != request.IsSharedTemplate) || last.Title != request.Title.Trim() || last.Content != request.Content || previousBindings.Count != request.Bindings.Count || previousBindings.Any(x => !request.Bindings.TryGetValue(x.Key, out var value) || value != x.Value))
                     return Conflict(ApiResponse<object>.Fail("Tài liệu đã được tạo. Mở lại từ danh sách để tránh tạo trùng sau lỗi kết nối."));
-                return Ok(ApiResponse<object>.Ok(new { existing.Id, existing.Revision, existing.IsTemplate, existing.UpdatedAtUtc }));
+                return Ok(ApiResponse<object>.Ok(new { existing.Id, existing.Revision, existing.IsTemplate, existing.IsSharedTemplate, existing.UpdatedAtUtc }));
             }
+        }
+        string? forkedContent = null;
+        if (doc is null && request.IsTemplate && parsed.Preservation is not null)
+        {
+            var editor = new ContractDocumentEditorController(pdf!, db, tenant) { ControllerContext = ControllerContext };
+            var exported = await editor.Export("docx", new() { Content = request.Content, Title = request.Title, Bindings = new(), AllowUnboundPreview = true }, ct);
+            if (exported is not FileContentResult file) return exported;
+            using var stream = new MemoryStream(ContractDocumentEditorController.CleanReusableTemplate(file.FileContents));
+            var imported = await editor.Import(new FormFile(stream, 0, stream.Length, "file", "template.docx"), ct);
+            if (imported is not OkObjectResult { Value: ApiResponse<object> response }) return imported;
+            request.Content = JsonSerializer.SerializeToElement(response.Data, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }).GetProperty("content").GetString()!;
+            forkedContent = request.Content;
+            ContractTermRichText.TryParse(request.Content, out parsed);
         }
         if (doc is null)
         {
             if (request.ExpectedRevision != 0) return Conflict(ApiResponse<object>.Fail("Phiên bản tạo mới không hợp lệ."));
-            doc = new() { Id = request.ClientDocumentId is { } supplied && supplied != Guid.Empty ? supplied : Guid.NewGuid(), TenantId = tenant.GetRequiredTenant().TenantId, EmployeeId = Actor, IsTemplate = request.IsTemplate };
+            doc = new() { Id = request.ClientDocumentId is { } supplied && supplied != Guid.Empty ? supplied : Guid.NewGuid(), TenantId = tenant.GetRequiredTenant().TenantId, EmployeeId = Actor, IsTemplate = request.IsTemplate, IsSharedTemplate = request.IsSharedTemplate };
             db.Add(doc);
         }
         else if (doc.Revision != request.ExpectedRevision) return Conflict(ApiResponse<object>.Fail("Tài liệu đã thay đổi ở cửa sổ khác. Mở lại bản mới nhất trước khi lưu."));
+        doc.SourceAssetId = parsed.Preservation?.SourceId;
         doc.Title = request.Title.Trim(); doc.Revision++; doc.UpdatedAtUtc = DateTime.UtcNow;
         db.Add(new ContractEditorRevision { DocumentId = doc.Id, Revision = doc.Revision, Title = doc.Title, Content = request.Content, Bindings = JsonSerializer.Serialize(request.Bindings), CreatedAtUtc = doc.UpdatedAtUtc });
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateConcurrencyException) { return Conflict(ApiResponse<object>.Fail("Tài liệu đã thay đổi ở cửa sổ khác. Hãy mở lại trước khi lưu.")); }
-        return Ok(ApiResponse<object>.Ok(new { doc.Id, doc.Revision, doc.IsTemplate, doc.UpdatedAtUtc }));
+        return Ok(ApiResponse<object>.Ok(new { doc.Id, doc.Revision, doc.IsTemplate, doc.IsSharedTemplate, doc.UpdatedAtUtc, content = forkedContent }));
     }
 
     [HttpPost("{id:guid}/archive")]
@@ -135,7 +168,7 @@ public sealed class ContractEditorDraftsController(DbDtctechContext db, ICurrent
     {
         var doc = await Readable.SingleOrDefaultAsync(x => x.Id == id && x.IsTemplate, ct);
         if (doc is null) return NotFound();
-        if (!await CanManageTemplates(ct)) return StatusCode(403, ApiResponse<object>.Fail("Bạn không có quyền quản lý mẫu văn bản."));
+        if (doc.IsSharedTemplate && !await CanManageTemplates(ct)) return StatusCode(403, ApiResponse<object>.Fail("Bạn không có quyền quản lý mẫu dùng chung."));
         if (doc.Revision != expectedRevision) return Conflict(ApiResponse<object>.Fail("Mẫu đã thay đổi. Tải lại trước khi ngừng sử dụng."));
         var current = await db.Set<ContractEditorRevision>().AsNoTracking().SingleAsync(x => x.DocumentId == id && x.Revision == doc.Revision, ct);
         doc.IsArchived = true;

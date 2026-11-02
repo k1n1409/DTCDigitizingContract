@@ -17,8 +17,10 @@ export interface ContractRichTextRun {
 export type ContractRichTextAlignment = "left" | "center" | "right" | "justify";
 
 export interface ContractRichTextParagraph {
+  sourceKey?: string;
   runs: ContractRichTextRun[];
   alignment?: ContractRichTextAlignment;
+  pageBreakBefore?: boolean;
 }
 
 export interface ContractRichTextCell {
@@ -37,18 +39,28 @@ export interface ContractRichTextRow {
 export type ContractRichTextBlock =
   | {
       type: "paragraph";
+      sourceKey?: string;
+      locked?: boolean;
+      label?: string;
+      previewImage?: string;
       runs: ContractRichTextRun[];
       alignment?: ContractRichTextAlignment;
+      pageBreakBefore?: boolean;
     }
   | {
       type: "table";
+      sourceKey?: string;
       columnWidthsBps: number[];
       rows: ContractRichTextRow[];
     };
 
 export interface ContractRichTextDocument {
   blocks: ContractRichTextBlock[];
+  preservation?: { sourceId: string; sha256: string; fieldKeys?: string[] };
 }
+
+const sourceKey = (value: unknown) => typeof value === "string" && /^[bp][0-9]{1,5}$/.test(value) ? value : undefined;
+const blockSourceKey = (value: unknown) => typeof value === "string" && /^b[0-9]{1,5}$/.test(value) ? value : undefined;
 
 const normalizeFontSize = (value: unknown) => {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
@@ -103,6 +115,8 @@ const normalizeParagraph = (value: unknown): ContractRichTextParagraph => {
   const alignment = normalizeAlignment(record.alignment);
   return {
     runs: normalizeRuns(record.runs),
+    ...(sourceKey(record.sourceKey) ? { sourceKey: sourceKey(record.sourceKey) } : {}),
+    ...(record.pageBreakBefore === true ? { pageBreakBefore: true } : {}),
     ...(alignment ? { alignment } : {}),
   };
 };
@@ -264,7 +278,10 @@ export const normalizeContractRichTextDocument = (
       const alignment = normalizeAlignment(block.alignment);
       normalizedBlocks.push({
         type: "paragraph",
+        ...(blockSourceKey(block.sourceKey) ? { sourceKey: blockSourceKey(block.sourceKey) } : {}),
+        ...(block.locked === true ? { locked: true, label: typeof block.label === "string" ? block.label.slice(0, 128) : "Khối Word gốc", ...(typeof block.previewImage === "string" && block.previewImage.length <= 250000 && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(block.previewImage) ? { previewImage: block.previewImage } : {}) } : {}),
         runs: normalizeRuns(block.runs),
+        ...(block.pageBreakBefore === true ? { pageBreakBefore: true } : {}),
         ...(alignment ? { alignment } : {}),
       });
       return;
@@ -330,6 +347,7 @@ export const normalizeContractRichTextDocument = (
     if (rows.length > 0) {
       normalizedBlocks.push({
         type: "table",
+        ...(blockSourceKey(block.sourceKey) ? { sourceKey: blockSourceKey(block.sourceKey) } : {}),
         columnWidthsBps: [...block.columnWidthsBps],
         rows,
       });
@@ -337,7 +355,10 @@ export const normalizeContractRichTextDocument = (
   });
 
   if (invalid) return null;
-  return { blocks: normalizedBlocks };
+  const preservation = (value as ContractRichTextDocument).preservation;
+  if (preservation && (!/^[0-9a-f-]{36}$/i.test(preservation.sourceId) || !/^[0-9a-f]{64}$/i.test(preservation.sha256))) return null;
+  if (normalizedBlocks.some(block => block.type === "paragraph" && block.locked && (!preservation || !block.sourceKey))) return null;
+  return { blocks: normalizedBlocks, ...(preservation ? { preservation: { sourceId: preservation.sourceId, sha256: preservation.sha256, fieldKeys: (preservation.fieldKeys || []).filter(key => /^[A-Z][A-Z0-9_]{0,79}$/.test(key)).slice(0, 200) } } : {}) };
 };
 
 const emptyDocument = (): ContractRichTextDocument => ({ blocks: [] });
@@ -377,7 +398,7 @@ export const serializeContractRichText = (
 ) => {
   const normalized = normalizeContractRichTextDocument(document);
   if (!normalized) throw new Error("Rich text v4 không hợp lệ.");
-  if (!hasMeaningfulContent(normalized)) return "";
+  if (!hasMeaningfulContent(normalized) && !normalized.preservation) return "";
   return `${CONTRACT_RICH_TEXT_PREFIX}${JSON.stringify(normalized)}`;
 };
 

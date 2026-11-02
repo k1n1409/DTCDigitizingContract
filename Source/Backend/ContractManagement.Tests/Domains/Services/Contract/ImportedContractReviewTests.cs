@@ -54,6 +54,72 @@ public sealed class ImportedContractReviewTests
     }
 
     [Fact]
+    public void TemplateSanitizing_OnlyReplacesSelectedAnchor_AndPreservesOriginalAndLayoutParts()
+    {
+        var original = Source(); var hash = SHA256.HashData(original);
+        var fields = LegacyWordDocument.Detect(original, LegacyWordDocument.Read(original));
+        var company = fields.Single(f => f.Label == "Tên công ty");
+        var sanitized = LegacyWordDocument.TemplateDocument(original, fields, new Dictionary<Guid, string> { [company.Id] = "CUSTOMER_NAME_1" });
+        var blocks = LegacyWordDocument.Read(sanitized);
+        Assert.Contains(blocks, b => b.Text == "Tên công ty: {{CUSTOMER_NAME_1}}");
+        Assert.Contains(blocks, b => b.Text == "Lặp lại: CÔNG TY A");
+        Assert.Equal("proposed", company.Status); Assert.Equal("CÔNG TY A", company.Value);
+        Assert.Equal(hash, SHA256.HashData(original));
+        var report = JsonSerializer.SerializeToElement(LegacyWordDocument.LayoutReport(sanitized));
+        Assert.Equal(1, report.GetProperty("headers").GetInt32());
+        Assert.Equal(1, report.GetProperty("images").GetInt32());
+        Assert.Equal(1, report.GetProperty("tables").GetInt32());
+        Assert.Throws<ArgumentException>(() => LegacyWordDocument.TemplateDocument(original, fields, new Dictionary<Guid, string> { [Guid.NewGuid()] = "CUSTOMER_NAME" }));
+        Assert.Throws<ArgumentException>(() => LegacyWordDocument.TemplateDocument(original, fields, new Dictionary<Guid, string> { [company.Id] = "SOURCE_CUSTOMER_ID" }));
+    }
+
+    [Fact]
+    public void SafeTextEdits_KeepMergedAndNestedTablesAndExplicitPageBreaks()
+    {
+        var nested = new Table(new TableRow(new TableCell(new Paragraph(new Run(new Text("Không sửa bảng lồng"))))));
+        var table = new Table(new TableRow(
+            new TableCell(new TableCellProperties(new GridSpan { Val = 2 }), new Paragraph(new Run(new Text("Tên công ty: Cũ")))),
+            new TableCell(new Paragraph(new Run(new Text("Không sửa"))), nested, new Paragraph())));
+        var bytes = DocumentWith(table, new Paragraph(new Run(new Break { Type = BreakValues.Page })));
+        var fields = LegacyWordDocument.Detect(bytes, LegacyWordDocument.Read(bytes));
+        var field = Assert.Single(fields, f => f.Label == "Tên công ty"); field.Value = "Mới"; field.Status = "confirmed";
+        var output = LegacyWordDocument.Apply(bytes, fields);
+        var report = JsonSerializer.SerializeToElement(LegacyWordDocument.LayoutReport(output));
+        Assert.Equal(2, report.GetProperty("tables").GetInt32());
+        Assert.Equal(1, report.GetProperty("mergedCells").GetInt32());
+        Assert.Equal(1, report.GetProperty("nestedTables").GetInt32());
+        Assert.Equal(1, report.GetProperty("pageBreaks").GetInt32());
+        Assert.Contains(LegacyWordDocument.Read(output), b => b.Text == "Tên công ty: Mới");
+        Assert.Contains(LegacyWordDocument.Read(output), b => b.Text == "Không sửa bảng lồng");
+    }
+
+    [Fact]
+    public async Task OriginalPreviewAndSanitizedTemplate_EnforceOwnerPermissionHashAndRevision()
+    {
+        await using var db = new DbDtctechContext(new DbContextOptionsBuilder<DbDtctechContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        db.TblEmployees.Add(new TblEmployee { EmployeeId = 10, EmployeeType = 3, Status = 1 });
+        db.TblEmployees.Add(new TblEmployee { EmployeeId = 20, EmployeeType = 3, Status = 1 });
+        db.TblEmployees.Add(new TblEmployee { EmployeeId = 30, EmployeeType = 1, Status = 1 });
+        await db.SaveChangesAsync(); var original = Source(); using var stream = new MemoryStream(original);
+        var renderer = new CapturingPdf(); var api = Controller(db, renderer: renderer);
+        await api.Upload(new FormFile(stream, 0, stream.Length, "file", "source.docx"), default);
+        var head = await db.Set<ImportedContractDocument>().SingleAsync();
+        var fields = LegacyWordDocument.Detect(original, LegacyWordDocument.Read(original));
+        // Persisted detected IDs are authoritative, not a fresh detection's GUIDs.
+        var revision = await db.Set<ImportedContractRevision>().SingleAsync();
+        fields = JsonSerializer.Deserialize<List<LegacyField>>(revision.Fields)!;
+        var request = new ImportedContractsController.TemplateDocumentRequest { Revision = 1, SourceSha256 = head.Sha256, Replacements = new() { [fields[0].Id] = "CUSTOMER_NAME" } };
+        Assert.IsType<FileContentResult>(await api.TemplateDocument(head.Id, request));
+        Assert.IsType<NotFoundResult>(await Controller(db, actor: 20).TemplateDocument(head.Id, request));
+        Assert.IsType<NotFoundResult>(await Controller(db, actor: 30).TemplateDocument(head.Id, request));
+        Assert.IsType<NotFoundResult>(await Controller(db, actor: 20).OriginalPreview(head.Id));
+        Assert.IsType<FileContentResult>(await api.OriginalPreview(head.Id)); Assert.Equal(original, renderer.Input);
+        request.SourceSha256 = "wrong"; Assert.IsType<ConflictObjectResult>(await api.TemplateDocument(head.Id, request));
+        request.SourceSha256 = head.Sha256; request.Revision = 99; Assert.IsType<NotFoundResult>(await api.TemplateDocument(head.Id, request));
+        Assert.Equal(original, head.OriginalDocx); Assert.Equal(1, head.Revision);
+    }
+
+    [Fact]
     public void Apply_SplitRunRange_LeavesRepeatedTextAndOtherPartsIntact()
     {
         var original = Source(); var hash = SHA256.HashData(original);

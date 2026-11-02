@@ -10,6 +10,49 @@ namespace ContractManagement.Tests.Domains.Services.Contract;
 
 public sealed class ContractDocumentEditorTests
 {
+    [Fact]
+    public async Task ExportImport_PreservesMergedCellsVietnameseFontWidthsAndPageBreak()
+    {
+        var controller = new ContractDocumentEditorController(new UnavailablePdf());
+        var model = new ContractTermRichTextDocument { Blocks = [
+            new() { Type = "paragraph", PageBreakBefore = true, Alignment = "center", Runs = [new() { Text = "Hợp đồng tiếng Việt — Đặng Thị Hồng", FontFamily = "Times New Roman", FontSize = 14, Bold = true, Italic = true, Underline = true }] },
+            new() { Type = "table", ColumnWidthsBps = [3000, 7000], Rows = [
+                new() { Cells = [new() { Rowspan = 2, VerticalAlign = "center", Paragraphs = [new() { Runs = [new() { Text = "Ghép dọc" }] }] }, new() { Paragraphs = [new() { Runs = [new() { Text = "Cột 2" }] }] }] },
+                new() { Cells = [new() { Paragraphs = [new() { Runs = [new() { Text = "Dòng 2" }] }] }] },
+                new() { Cells = [new() { Colspan = 2, Paragraphs = [new() { Runs = [new() { Text = "Ghép ngang" }] }] }] }
+            ] }
+        ] };
+        model.Blocks.Insert(0, new() { Type = "paragraph", Alignment = "center", Runs = [new() { Text = "TRANG 1 — KIỂM TRA BẢN XUẤT", Bold = true, FontSize = 16 }] });
+        var content = ContractTermRichText.Prefix + JsonSerializer.Serialize(model, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        Assert.True(ContractTermRichText.TryParse(content, out _), content);
+        var file = Assert.IsType<FileContentResult>(await controller.Export("docx", new() { Content = content }, default));
+        var converter = Environment.GetEnvironmentVariable("IMPORTED_CONTRACT_LIBREOFFICE_PATH");
+        if (System.IO.File.Exists(converter))
+        {
+            var renderer = new ContractManagement.Domains.Services.ContractTemplate.LibreOfficeContractTemplatePdfRenderer(Microsoft.Extensions.Options.Options.Create(new ContractManagement.Domains.Services.ContractTemplate.TemplatePdfRenderingOptions { ExecutablePath = converter }));
+            var bytes = await renderer.ConvertPreviewToPdfAsync(file.FileContents);
+            Assert.True(bytes.AsSpan(0, 5).SequenceEqual("%PDF-"u8));
+            var target = Environment.GetEnvironmentVariable("EDITOR_EXPORT_PDF_FIXTURE_PATH");
+            if (!string.IsNullOrWhiteSpace(target)) await System.IO.File.WriteAllBytesAsync(target, bytes);
+        }
+        using (var input = new MemoryStream(file.FileContents))
+        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(input, false))
+        {
+            var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator().Validate(doc).ToList();
+            Assert.True(errors.Count == 0, string.Join("; ", errors.Select(e => e.Description)));
+        }
+        using var stream = new MemoryStream(file.FileContents);
+        var imported = Assert.IsType<OkObjectResult>(await controller.Import(new FormFile(stream, 0, stream.Length, "file", "merged.docx"), default));
+        var json = JsonSerializer.SerializeToElement(Assert.IsType<ApiResponse<object>>(imported.Value).Data);
+        Assert.True(ContractTermRichText.TryParse(json.GetProperty("content").GetString(), out var result));
+        Assert.True(result.Blocks[1].PageBreakBefore);
+        Assert.Equal("Hợp đồng tiếng Việt — Đặng Thị Hồng", result.Blocks[1].Runs[0].Text);
+        Assert.Equal("Times New Roman", result.Blocks[1].Runs[0].FontFamily);
+        Assert.Equal(new[] { 3000, 7000 }, result.Blocks[2].ColumnWidthsBps);
+        Assert.Equal(2, result.Blocks[2].Rows[0].Cells[0].Rowspan);
+        Assert.Single(result.Blocks[2].Rows[1].Cells);
+        Assert.Equal(2, result.Blocks[2].Rows[2].Cells[0].Colspan);
+    }
     private const string Content = ContractTermRichText.Prefix + "{\"blocks\":[{\"type\":\"paragraph\",\"runs\":[{\"text\":\"Mã số thuế: 123456789\",\"bold\":true}],\"alignment\":\"center\"}]}";
 
     [Fact]

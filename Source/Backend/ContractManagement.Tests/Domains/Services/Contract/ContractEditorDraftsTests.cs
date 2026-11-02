@@ -14,6 +14,38 @@ namespace ContractManagement.Tests.Domains.Services.Contract;
 
 public sealed class ContractEditorDraftsTests
 {
+    [Fact]
+    public async Task PersonalTemplates_AreOwnerOnly_AndCannotBeMadeSharedByUpdate()
+    {
+        await using var db = Context(); var owner = Controller(db);
+        Assert.IsType<OkObjectResult>(await owner.Create(new() { Title = "Mẫu riêng", IsTemplate = true, IsSharedTemplate = false }, default));
+        var doc = await db.Set<ContractEditorDocument>().SingleAsync();
+        Assert.IsType<OkObjectResult>(await owner.Read(doc.Id));
+        var other = Controller(db, 20);
+        Assert.IsType<NotFoundResult>(await other.Read(doc.Id));
+        Assert.IsType<NotFoundResult>(await other.History(doc.Id));
+        Assert.IsType<NotFoundResult>(await other.Update(doc.Id, new() { Title = "X", IsTemplate = true, IsSharedTemplate = false, ExpectedRevision = 1 }, default));
+        Assert.IsType<OkObjectResult>(await owner.Update(doc.Id, new() { Title = "Mẫu riêng 2", IsTemplate = true, IsSharedTemplate = false, ExpectedRevision = 1 }, default));
+        // Without template permission, even the owner cannot publish a shared copy.
+        Assert.Equal(403, Assert.IsType<ObjectResult>(await owner.Create(new() { Title = "Chia sẻ", IsTemplate = true, IsSharedTemplate = true }, default)).StatusCode);
+        Assert.False(doc.IsSharedTemplate);
+    }
+    [Fact]
+    public async Task ProviderBinding_UsesCurrentTenantLegalProfile_AndDoesNotChangeSource()
+    {
+        await using var db = Context();
+        db.TblTenantLegalProfiles.Add(new TblTenantLegalProfile { TenantLegalProfileId = 1, LegalEntityName = "DTC test", TaxCode = "TAX-TEST", Address = "Địa chỉ kiểm thử", RepresentativeName = "Đại diện test", RepresentativeTitle = "Giám đốc", PhoneNumber = "PHONE-TEST", FaxNumber = "FAX-TEST", BankAccountNumber = "ACCOUNT-TEST", BankName = "BANK-TEST" });
+        await db.SaveChangesAsync();
+        var result = Assert.IsType<OkObjectResult>(await Controller(db).BindingValues("provider", 1, default));
+        var values = JsonSerializer.SerializeToElement(Assert.IsType<ApiResponse<object>>(result.Value).Data);
+        Assert.Equal("DTC test", values.GetProperty("PROVIDER_NAME").GetString());
+        Assert.Equal("Đại diện test", values.GetProperty("PROVIDER_REPRESENTATIVE").GetString());
+        Assert.Equal("ACCOUNT-TEST", values.GetProperty("PROVIDER_BANK_ACCOUNT_NUMBER").GetString());
+        Assert.Equal("FAX-TEST", values.GetProperty("PROVIDER_FAX").GetString());
+        await using var otherTenant = Context();
+        Assert.IsType<NotFoundObjectResult>(await Controller(otherTenant, tenantId: 2).BindingValues("provider", 1, default));
+        Assert.Equal("DTC test", (await db.TblTenantLegalProfiles.SingleAsync()).LegalEntityName);
+    }
     private static DbDtctechContext Context() => new(new DbContextOptionsBuilder<DbDtctechContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
     private static ContractEditorDraftsController Controller(DbDtctechContext db, int actor = 10, int tenantId = 1)
     {

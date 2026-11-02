@@ -6,13 +6,13 @@ const p = (text: string, bold = false, alignment?: "center" | "right"): Contract
 const value = (data: Record<string, string>, key: string) => data[key]?.trim() || `{{${key}}}`;
 const party = (data: Record<string, string>, prefix: string, heading: string): ContractRichTextBlock[] => [
   p(`${heading}: ${value(data, `${prefix}_NAME`)}`, true),
-  ...[["Đại diện", "REPRESENTATIVE"], ["Chức vụ", "TITLE"], ["Địa chỉ", "ADDRESS"], ["Mã số thuế", "TAX_CODE"], ["Điện thoại", "PHONE"], ["Email", "EMAIL"]].map(([label, key]) => p(`${label}: ${value(data, `${prefix}_${key}`)}`)),
+  ...[["Đại diện", "REPRESENTATIVE"], ["Chức vụ", "TITLE"], ["Địa chỉ", "ADDRESS"], ["Mã số thuế", "TAX_CODE"], ["Điện thoại", "PHONE"], ...(prefix === "PROVIDER" ? [["Fax", "FAX"], ["Tài khoản ngân hàng", "BANK_ACCOUNT_NUMBER"], ["Ngân hàng", "BANK_NAME"]] : [["Email", "EMAIL"]])].map(([label, key]) => p(`${label}: ${value(data, `${prefix}_${key}`)}`)),
 ];
-const partyFields = (prefix: string): Field[] => [["NAME", "Tên đơn vị"], ["REPRESENTATIVE", "Người đại diện"], ["TITLE", "Chức vụ"], ["ADDRESS", "Địa chỉ"], ["TAX_CODE", "Mã số thuế"], ["PHONE", "Điện thoại"], ["EMAIL", "Email"]].map(([key, label]) => ({ key: `${prefix}_${key}`, label }));
+const partyFields = (prefix: string): Field[] => [["NAME", "Tên đơn vị"], ["REPRESENTATIVE", "Người đại diện"], ["TITLE", "Chức vụ"], ["ADDRESS", "Địa chỉ"], ["TAX_CODE", "Mã số thuế"], ["PHONE", "Điện thoại"], ...(prefix === "PROVIDER" ? [["FAX", "Fax"], ["BANK_ACCOUNT_NUMBER", "Số tài khoản"], ["BANK_NAME", "Ngân hàng"]] : [["EMAIL", "Email"]])].map(([key, label]) => ({ key: `${prefix}_${key}`, label }));
 export const CONTRACT_SNIPPETS: Snippet[] = [
   { id: "heading", title: "Quốc hiệu & tên hợp đồng", description: "Khung đầu trang và số hợp đồng", fields: [{ key: "CONTRACT_NAME", label: "Tên hợp đồng" }, { key: "CONTRACT_CODE", label: "Số hợp đồng" }], build: d => [p("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM", true, "center"), p("Độc lập - Tự do - Hạnh phúc", true, "center"), p(""), p(value(d, "CONTRACT_NAME"), true, "center"), p(`Số: ${value(d, "CONTRACT_CODE")}`, false, "center")] },
   { id: "customer", title: "Thông tin Bên A", description: "Có thể lấy giá trị khách hàng đã liên kết", fields: partyFields("CUSTOMER"), build: d => party(d, "CUSTOMER", "BÊN A") },
-  { id: "provider", title: "Thông tin Bên B", description: "Đơn vị cung cấp và người đại diện", fields: partyFields("PROVIDER"), build: d => party(d, "PROVIDER", "BÊN B") },
+  { id: "provider", title: "Bên B · Hồ sơ pháp lý công ty", description: "Lấy thông tin công ty từ hồ sơ pháp lý tenant đang đăng nhập", fields: partyFields("PROVIDER"), build: d => party(d, "PROVIDER", "BÊN B") },
   { id: "scope", title: "Phạm vi công việc", description: "Sản phẩm/dịch vụ, kết quả và thời hạn", fields: [{ key: "SCOPE_TITLE", label: "Tiêu đề điều khoản" }, { key: "SCOPE_CONTENT", label: "Nội dung công việc" }, { key: "DELIVERY_DATE", label: "Thời hạn bàn giao" }], build: d => [p(d.SCOPE_TITLE || "Điều 1. Phạm vi công việc", true), p(value(d, "SCOPE_CONTENT")), p(`Thời hạn bàn giao: ${value(d, "DELIVERY_DATE")}`)] },
   { id: "payment", title: "Giá trị & thanh toán", description: "Giá trị, thời hạn và tài khoản nhận tiền", fields: [{ key: "CONTRACT_AMOUNT", label: "Giá trị thanh toán" }, { key: "PAYMENT_SCHEDULE", label: "Tiến độ thanh toán" }, { key: "PAYMENT_ACCOUNT", label: "Tài khoản thụ hưởng" }], build: d => [p("Điều 2. Giá trị và thanh toán", true), p(`Giá trị: ${value(d, "CONTRACT_AMOUNT")}`), p(`Tiến độ thanh toán: ${value(d, "PAYMENT_SCHEDULE")}`), p(`Tài khoản thụ hưởng: ${value(d, "PAYMENT_ACCOUNT")}`)] },
   { id: "terms", title: "Điều khoản tùy chỉnh", description: "Bảo hành, bảo mật hoặc điều khoản khác", fields: [{ key: "TERM_TITLE", label: "Tiêu đề" }, { key: "TERM_CONTENT", label: "Nội dung" }], build: d => [p(value(d, "TERM_TITLE"), true), p(value(d, "TERM_CONTENT"))] },
@@ -23,8 +23,10 @@ export function snippetContent(id: string, data: Record<string, string>) {
   if (!snippet) throw new Error("Cụm nội dung không hợp lệ.");
   return serializeContractRichText({ blocks: snippet.build(data) });
 }
-export function linkedSnippetContent(id: string) {
+export function linkedSnippetContent(id: string, available?: Record<string, string>) {
   const snippet = CONTRACT_SNIPPETS.find(item => item.id === id);
   if (!snippet) throw new Error("Cụm nội dung không hợp lệ.");
-  return snippetContent(id, Object.fromEntries(snippet.fields.map(field => [field.key, `{{${field.key}}}`])));
+  const tokens = Object.fromEntries(snippet.fields.map(field => [field.key, `{{${field.key}}}`]));
+  const blocks = snippet.build(tokens).filter(block => id !== "provider" || !available || block.type !== "paragraph" || !["PROVIDER_FAX", "PROVIDER_BANK_ACCOUNT_NUMBER", "PROVIDER_BANK_NAME"].some(key => !available[key]?.trim() && block.runs.some(run => run.text.includes(`{{${key}}}`))));
+  return serializeContractRichText({ blocks });
 }

@@ -311,22 +311,36 @@
   }
 }
 
-/* Larger workspace chrome; document typography is deliberately left untouched. */
+/* 90%-style desktop density without browser zoom or scaled document coordinates. */
+[data-document-shell],
 .document-workspace-ui {
-  font-size: 15px;
-  line-height: 1.55;
+  --spacing: 0.225rem;
+}
+.document-workspace-ui {
+  font-size: 14.5px;
+  line-height: 1.5;
 }
 .document-workspace-ui :is(.text-xs, .text-\[10px\], .text-\[11px\]):not([data-document-content] *, [data-editor-page] *) {
-  font-size: 14px;
+  font-size: 13.5px;
   line-height: 1.5;
 }
 .document-workspace-ui .text-sm:not([data-document-content] *, [data-editor-page] *) {
-  font-size: 15px;
-  line-height: 1.55;
+  font-size: 14.5px;
+  line-height: 1.5;
 }
 .document-workspace-ui :is(button, input, select, label):not([data-document-content] *, [data-editor-page] *) {
-  font-size: 15px;
+  font-size: 14.5px;
 }
 .document-workspace-ui :is(h1, h2, h3):not([data-document-content] *, [data-editor-page] *) {
   font-size: 16px;
+}
+/* A4 pages, DOCX editing measurements and PDF zoom retain their own sizing. */
+.document-workspace-ui :is([data-document-content], [data-editor-page]) {
+  --spacing: 0.25rem;
+  font-size: 16px;
+}
+/* Keep touch controls comfortably sized on narrow screens. */
+@media (max-width: 767px) {
+  [data-document-shell], .document-workspace-ui { --spacing: 0.25rem; }
+  .document-workspace-ui :is(button, input, select, label):not([data-document-content] *, [data-editor-page] *) { font-size: 16px; }
 }

@@ -22,6 +22,43 @@ public sealed class LegacyField
 
 public static class LegacyWordDocument
 {
+    public static object LayoutReport(byte[] bytes, IReadOnlyList<LegacyTextBlock>? knownBlocks = null)
+    {
+        var blocks = knownBlocks ?? Read(bytes);
+        using var stream = new MemoryStream(bytes);
+        using var doc = WordprocessingDocument.Open(stream, false);
+        var body = doc.MainDocumentPart!.Document!.Body!;
+        var tables = body.Descendants<Table>().ToList();
+        return new {
+            tables = tables.Count,
+            mergedCells = body.Descendants<TableCell>().Count(c => c.TableCellProperties?.GridSpan is not null || c.TableCellProperties?.VerticalMerge is not null),
+            nestedTables = tables.Count(t => t.Ancestors<Table>().Any()),
+            images = doc.MainDocumentPart.ImageParts.Count() + doc.MainDocumentPart.HeaderParts.Sum(h => h.ImageParts.Count()) + doc.MainDocumentPart.FooterParts.Sum(f => f.ImageParts.Count()),
+            headers = doc.MainDocumentPart.HeaderParts.Count(),
+            footers = doc.MainDocumentPart.FooterParts.Count(),
+            pageBreaks = body.Descendants<Break>().Count(b => b.Type?.Value == BreakValues.Page),
+            readOnlyBlocks = blocks.Count(b => !b.Editable),
+            editableBlocks = blocks.Count(b => b.Editable && b.Text.Length > 0),
+            exportPreservesOriginalPackage = true,
+            editorTemplateIsBasicLayout = false,
+            editorTemplatePreservesOriginalPackage = true,
+            editorComplexBlocksAreReadOnly = true
+        };
+    }
+
+    public static byte[] TemplateDocument(byte[] original, IReadOnlyList<LegacyField> fields, IReadOnlyDictionary<Guid, string> replacements)
+    {
+        if (replacements.Count > 200 || replacements.Any(x => !Regex.IsMatch(x.Value, "^[A-Z][A-Z0-9_]{0,79}$") || x.Value.StartsWith("SOURCE_", StringComparison.Ordinal)))
+            throw new ArgumentException("Trường mẫu không hợp lệ hoặc vượt giới hạn 200 trường.");
+        if (replacements.Keys.Any(id => !fields.Any(f => f.Id == id))) throw new ArgumentException("Trường không thuộc phiên bản đang chọn.");
+        var copy = fields.Select(f => new LegacyField {
+            Id = f.Id, BlockId = f.BlockId, Start = f.Start, Length = f.Length, Original = f.Original,
+            Label = f.Label, Party = f.Party,
+            Value = replacements.TryGetValue(f.Id, out var key) ? "{{" + key + "}}" : f.Value,
+            Status = replacements.ContainsKey(f.Id) ? "confirmed" : f.Status
+        }).ToList();
+        return Apply(original, copy);
+    }
     private const string Labels = @"Tên (?:khách hàng|công ty|doanh nghiệp)|Mã số thuế|MST|Địa chỉ(?: trụ sở)?|Điện thoại|Số điện thoại|Fax|Email|Số hợp đồng|Mã hợp đồng|Ngày (?:ký|hiệu lực|hết hạn)|Đại diện|Người đại diện|Chức vụ|Chức danh|Giá trị hợp đồng|Tổng giá trị|(?:Số )?Tài khoản(?: ngân hàng)?|Ngân hàng";
     private static List<Paragraph> Paragraphs(WordprocessingDocument doc) => doc.MainDocumentPart?.Document?.Body?.Descendants<Paragraph>().Where(p => !p.Ancestors<Paragraph>().Any()).ToList() ?? throw new ArgumentException("Không có phần thân DOCX.");
     private static List<Text> Texts(Paragraph p) => p.Descendants<Text>().Where(t => t.Ancestors<Paragraph>().FirstOrDefault() == p).ToList();

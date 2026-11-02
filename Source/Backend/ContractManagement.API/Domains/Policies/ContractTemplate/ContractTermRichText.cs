@@ -38,9 +38,13 @@ public static class ContractTermRichText
             {
                 return false;
             }
+            if (parsed.Preservation is { } preservation && (preservation.SourceId == Guid.Empty || preservation.Sha256 is not { Length: 64 } || preservation.FieldKeys is null || preservation.FieldKeys.Count > 200 || preservation.FieldKeys.Any(key => key is null || !System.Text.RegularExpressions.Regex.IsMatch(key, "^[A-Z][A-Z0-9_]{0,79}$")))) return false;
 
             foreach (var block in parsed.Blocks)
             {
+                if (block.SourceKey is not null && !System.Text.RegularExpressions.Regex.IsMatch(block.SourceKey, "^b[0-9]{1,5}$")) return false;
+                if (block.Locked && (parsed.Preservation is null || block.SourceKey is null)) return false;
+                if (block.Label?.Length > 128 || block.PreviewImage?.Length > 250000 || (block.PreviewImage is not null && !System.Text.RegularExpressions.Regex.IsMatch(block.PreviewImage, "^data:image/(png|jpeg);base64,[A-Za-z0-9+/=]+$"))) return false;
                 if (block.Type == "paragraph")
                 {
                     if (!IsAlignmentValid(block.Alignment)
@@ -175,15 +179,28 @@ public static class ContractTermRichText
 public sealed class ContractTermRichTextDocument
 {
     public List<ContractTermRichTextBlock> Blocks { get; set; } = [];
+    public ContractEditorPreservation? Preservation { get; set; }
+}
+
+public sealed class ContractEditorPreservation
+{
+    public Guid SourceId { get; set; }
+    public string Sha256 { get; set; } = "";
+    public List<string> FieldKeys { get; set; } = [];
 }
 
 public sealed class ContractTermRichTextBlock
 {
+    public string? SourceKey { get; set; }
+    public bool Locked { get; set; }
+    public string? Label { get; set; }
+    public string? PreviewImage { get; set; }
     public string Type { get; set; } = string.Empty;
     public List<ContractTermRichTextRun> Runs { get; set; } = [];
     public List<ContractTermRichTextRow> Rows { get; set; } = [];
     public List<int> ColumnWidthsBps { get; set; } = [];
     public string? Alignment { get; set; }
+    public bool PageBreakBefore { get; set; }
 }
 
 public sealed class ContractTermRichTextRow
@@ -204,8 +221,10 @@ public sealed class ContractTermRichTextCell
 
 public sealed class ContractTermRichTextParagraph
 {
+    public string? SourceKey { get; set; }
     public List<ContractTermRichTextRun> Runs { get; set; } = [];
     public string? Alignment { get; set; }
+    public bool PageBreakBefore { get; set; }
 }
 
 public sealed class ContractTermRichTextRun

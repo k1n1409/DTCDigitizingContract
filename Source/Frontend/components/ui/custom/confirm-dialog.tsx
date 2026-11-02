@@ -23,6 +23,7 @@ interface ConfirmDialogProps {
   confirmText?: string;
   cancelText?: string;
   isLoading?: boolean;
+  confirmDisabled?: boolean;
   variant?: "default" | "destructive" | "outline" | "secondary"; // Tùy chỉnh màu nút Xác nhận
   titleClassName?: string; // Để custom màu chữ của Title (VD: text-rose-600 cho việc xóa)
 }
@@ -37,6 +38,7 @@ export function ConfirmDialog({
   confirmText = "Xác nhận",
   cancelText = "Hủy bỏ",
   isLoading = false,
+  confirmDisabled = false,
   variant = "default",
   titleClassName,
 }: ConfirmDialogProps) {
@@ -45,7 +47,7 @@ export function ConfirmDialog({
       open={isOpen}
       onOpenChange={(open) => !open && !isLoading && onClose()}
     >
-      <DialogContent className="sm:max-w-[425px]">
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-[425px]">
         <DialogHeader>
           <DialogTitle
             className={cn("flex items-center gap-2", titleClassName)}
@@ -61,7 +63,7 @@ export function ConfirmDialog({
           <Button variant="outline" onClick={onClose} disabled={isLoading}>
             {cancelText}
           </Button>
-          <Button variant={variant} onClick={onConfirm} disabled={isLoading}>
+          <Button variant={variant} onClick={onConfirm} disabled={isLoading || confirmDisabled}>
             {isLoading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
             {confirmText}
           </Button>

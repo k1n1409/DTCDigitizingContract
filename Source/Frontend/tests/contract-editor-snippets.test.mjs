@@ -8,6 +8,20 @@ function load(file, require = () => { throw new Error("Unexpected import"); }) {
   const isolated = { exports: {} }; new Function("require", "exports", "module", js)(require, isolated.exports, isolated); return isolated.exports;
 }
 const rich = load("../lib/contract-rich-text.ts");
+test("Word preservation metadata and protected image/table blocks survive normalization and serialization", () => {
+  const preservation = { sourceId: "11111111-1111-4111-8111-111111111111", sha256: "A".repeat(64), fieldKeys: ["CONTRACT_CODE"] };
+  const doc = { preservation, blocks: [
+    { type: "paragraph", sourceKey: "b0", runs: [{ text: "Tiếng Việt" }] },
+    { type: "paragraph", sourceKey: "b1", locked: true, label: "Ảnh gốc", previewImage: "data:image/png;base64,AAAA", runs: [{ text: "Không chỉnh nội dung trong khối" }] },
+    { type: "table", sourceKey: "b2", columnWidthsBps: [10000], rows: [{ cells: [{ paragraphs: [{ sourceKey: "p5", runs: [{ text: "Ô bảng" }] }] }] }] }
+  ] };
+  const result = rich.parseContractRichText(rich.serializeContractRichText(doc));
+  assert.deepEqual(result.preservation, preservation);
+  assert.equal(result.blocks[1].locked, true); assert.equal(result.blocks[1].previewImage, doc.blocks[1].previewImage);
+  assert.equal(result.blocks[2].sourceKey, "b2"); assert.equal(result.blocks[2].rows[0].cells[0].paragraphs[0].sourceKey, "p5");
+  assert.throws(() => rich.serializeContractRichText({ blocks: [doc.blocks[1]] }));
+  assert.deepEqual(rich.parseContractRichText(rich.serializeContractRichText({ preservation, blocks: [] })).preservation, preservation);
+});
 const snippets = load("../lib/contract-editor-snippets.ts", name => { assert.equal(name, "@/lib/contract-rich-text"); return rich; });
 const smart = load("../lib/editor-smart-fields.ts", name => { assert.equal(name, "@/lib/contract-editor-snippets"); return snippets; });
 
@@ -16,6 +30,24 @@ test("linked snippets keep field identity instead of baking customer data into t
     const content = snippets.linkedSnippetContent(snippet.id);
     for (const field of snippet.fields) assert.ok(content.includes(`{{${field.key}}}`), `${snippet.id}: ${field.key}`);
   }
+});
+test("provider block uses linked legal profile fields and omits unavailable optional details", () => {
+  const content = snippets.linkedSnippetContent("provider", { PROVIDER_NAME: "DTC test", PROVIDER_BANK_NAME: "Test bank" });
+  assert.ok(content.includes("{{PROVIDER_NAME}}"));
+  assert.ok(content.includes("{{PROVIDER_BANK_NAME}}"));
+  assert.ok(!content.includes("{{PROVIDER_FAX}}"));
+  assert.ok(!content.includes("{{PROVIDER_BANK_ACCOUNT_NUMBER}}"));
+  assert.ok(!content.includes("DTC test"));
+});
+test("missing-field session stays stable when a value is filled or an active value stops matching search", () => {
+  const keys = ["CUSTOMER_NAME", "CONTRACT_CODE", "PROVIDER_NAME"];
+  const snapshot = ["CUSTOMER_NAME", "CONTRACT_CODE"];
+  const bindings = { CUSTOMER_NAME: "Đã điền", CONTRACT_CODE: "", PROVIDER_NAME: "DTC" };
+  assert.deepEqual(smart.filterEditorFieldKeys(keys, snapshot, "", "CUSTOMER_NAME", bindings), snapshot);
+  assert.deepEqual(smart.filterEditorFieldKeys(keys, snapshot, "không khớp", "CUSTOMER_NAME", bindings), ["CUSTOMER_NAME"]);
+  const refreshed = keys.filter(key => !bindings[key]?.trim());
+  assert.deepEqual(smart.filterEditorFieldKeys(keys, refreshed, "", "", bindings), ["CONTRACT_CODE"]);
+  assert.deepEqual(snapshot, ["CUSTOMER_NAME", "CONTRACT_CODE"]);
 });
 test("smart fields recognize tokens split across formatted runs without altering surrounding text", () => {
   const doc = { type: "doc", content: [{ type: "paragraph", content: [

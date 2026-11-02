@@ -104,7 +104,7 @@ export function ImportedDocumentCanvas({ blocks, fields, original, readOnly, bus
               const block = blocks.find(b => b.id === id); if (!block) return null;
               const canEdit = !original && !readOnly && block.editable && block.text.length <= 10000;
               return <div key={id} id={`source-${id}`} title={canEdit ? undefined : `${block.context}${block.editable ? "" : " · Vùng chỉ xem"}`}
-                className={`relative mb-2 min-h-7 whitespace-pre-wrap break-words rounded-sm py-1 ${canEdit ? "hover:bg-sky-50/60 focus-within:bg-sky-50/40 focus-within:ring-1 focus-within:ring-sky-200" : ""}`}
+                className={`relative mb-2 min-h-7 whitespace-pre-wrap break-words rounded-sm py-1 ${text(block) !== block.text ? "bg-amber-50/60 ring-1 ring-amber-300" : ""} ${!block.editable ? "bg-slate-50/60 ring-1 ring-slate-200" : ""} ${canEdit ? "hover:bg-sky-50/60 focus-within:bg-sky-50/40 focus-within:ring-1 focus-within:ring-sky-200" : ""}`}
                 data-block={id}>
                 {canEdit ? <PaperText blockId={id} label={`Nội dung ${block.context} ${id}`} value={text(block)} disabled={busy} onFocus={() => onFocusBlock(id)} onChange={value => onChange(block, value)} />
                   : <div tabIndex={0} onMouseUp={e => original && onSelect(block, e.currentTarget)} onKeyUp={e => original && onSelect(block, e.currentTarget)}>{original ? renderOriginal(block) : text(block) || <span className="text-slate-300">[Đã xóa nội dung]</span>}</div>}

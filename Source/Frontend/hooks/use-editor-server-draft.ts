@@ -4,13 +4,13 @@ import axiosClient from "@/lib/axios-interceptor";
 import { getApiErrorMessage } from "@/lib/api-error";
 
 export interface EditorSnapshot { title: string; content: string; bindings: Record<string, string> }
-export interface EditorStored extends EditorSnapshot { id: string; revision: number; currentRevision: number; isTemplate: boolean }
-export interface DraftSummary { id: string; title: string; revision: number; updatedAtUtc: string; isTemplate: boolean }
+export interface EditorStored extends EditorSnapshot { id: string; revision: number; currentRevision: number; isTemplate: boolean; isSharedTemplate: boolean }
+export interface DraftSummary { id: string; title: string; revision: number; updatedAtUtc: string; isTemplate: boolean; isSharedTemplate: boolean }
 export interface RevisionSummary { revision: number; title: string; createdAtUtc: string }
 const base = "/api/contract-editor-drafts";
 
 export function useEditorServerDraft(snapshot: EditorSnapshot, dirty: boolean, setDirty: (value: boolean) => void, apply: (value: EditorSnapshot) => void, paused = false) {
-  const [identity, setIdentity] = useState<{ id: string; revision: number; isTemplate: boolean } | null>(null);
+  const [identity, setIdentity] = useState<{ id: string; revision: number; isTemplate: boolean; isSharedTemplate: boolean } | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -28,12 +28,12 @@ export function useEditorServerDraft(snapshot: EditorSnapshot, dirty: boolean, s
     const head = identityRef.current;
     try {
       if (!clientDocumentId.current) clientDocumentId.current = crypto.randomUUID();
-      const request = { ...captured, expectedRevision: head?.revision ?? 0, clientDocumentId: clientDocumentId.current, isTemplate: head?.isTemplate ?? false };
+      const request = { ...captured, expectedRevision: head?.revision ?? 0, clientDocumentId: clientDocumentId.current, isTemplate: head?.isTemplate ?? false, isSharedTemplate: head?.isSharedTemplate ?? false };
       const result = head
-        ? await axiosClient.put<unknown, { id: string; revision: number; isTemplate: boolean }>(`${base}/${head.id}`, request)
-        : await axiosClient.post<unknown, { id: string; revision: number; isTemplate: boolean }>(base, request);
+        ? await axiosClient.put<unknown, NonNullable<typeof identityRef.current>>(`${base}/${head.id}`, request)
+        : await axiosClient.post<unknown, NonNullable<typeof identityRef.current>>(base, request);
       identityRef.current = result; setIdentity(result);
-      if (JSON.stringify(current.current) === JSON.stringify(captured)) setDirty(false);
+      if (JSON.stringify(current.current) === JSON.stringify(captured)) { setDirty(false); return result; }
     } catch (cause) { setError(getApiErrorMessage(cause, "Không lưu được nháp trên server. Kiểm tra kết nối/migration rồi bấm Lưu lại.")); }
     finally { lock.current = false; setSaving(false); }
   }, [loading, setDirty]);
@@ -51,7 +51,7 @@ export function useEditorServerDraft(snapshot: EditorSnapshot, dirty: boolean, s
         apply({ ...result, title: `Bản sao ${result.title}`.slice(0, 100), bindings: Object.fromEntries(Object.keys(result.bindings).filter(k => !k.startsWith("SOURCE_")).map(k => [k, ""])) });
         setIdentity(null); identityRef.current = null; clientDocumentId.current = null; setDirty(true);
       } else {
-        apply(result); setIdentity({ id: result.id, revision: result.currentRevision, isTemplate: result.isTemplate });
+        apply(result); const next = { id: result.id, revision: result.currentRevision, isTemplate: result.isTemplate, isSharedTemplate: result.isSharedTemplate }; setIdentity(next); identityRef.current = next;
         setDirty(revision !== undefined && revision !== result.currentRevision);
       }
       setError("");
@@ -60,15 +60,15 @@ export function useEditorServerDraft(snapshot: EditorSnapshot, dirty: boolean, s
     finally { lock.current = false; setLoading(false); }
   };
   const detach = () => { setIdentity(null); identityRef.current = null; clientDocumentId.current = null; setError(""); };
-  const saveAsTemplate = async () => {
+  const saveAsTemplate = async (isSharedTemplate = false) => {
     if (lock.current || loading) return;
     const captured = current.current;
     if (!captured.title.trim()) { setError("Nhập tên mẫu trước khi lưu."); return; }
     lock.current = true; setSaving(true); setError("");
     try {
       const clean = { ...captured, bindings: Object.fromEntries(Object.keys(captured.bindings).filter(k => !k.startsWith("SOURCE_")).map(k => [k, ""])) };
-      const result = await axiosClient.post<unknown, { id: string; revision: number; isTemplate: boolean }>(base, { ...clean, expectedRevision: 0, isTemplate: true, clientDocumentId: crypto.randomUUID() });
-      apply(clean); setIdentity(result); identityRef.current = result; setDirty(false);
+      const result = await axiosClient.post<unknown, NonNullable<typeof identityRef.current> & { content?: string }>(base, { ...clean, expectedRevision: 0, isTemplate: true, isSharedTemplate, clientDocumentId: crypto.randomUUID() });
+      apply({ ...clean, content: result.content || clean.content }); setIdentity(result); identityRef.current = result; setDirty(false);
       return true;
     } catch (cause) { setError(getApiErrorMessage(cause, "Không lưu được mẫu văn bản.")); return false; }
     finally { lock.current = false; setSaving(false); }

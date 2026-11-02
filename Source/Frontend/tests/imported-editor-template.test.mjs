@@ -20,7 +20,7 @@ test("Word review becomes a separate editor template from the exact saved revisi
   assert.equal(calls[0].url, "/api/imported-contracts/original/export/docx");
   assert.equal(calls[0].options.params.revision, 3);
   assert.equal(calls[1].body.get("file").name, "reviewed-v3.docx");
-  assert.deepEqual(calls[2].body, { title: "Mẫu mới", content: "structured content", bindings: {}, isTemplate: true, expectedRevision: 0, clientDocumentId: "stable-client-id" });
+  assert.deepEqual(calls[2].body, { title: "Mẫu mới", content: "structured content", bindings: {}, isTemplate: true, isSharedTemplate: false, expectedRevision: 0, clientDocumentId: "stable-client-id" });
   assert.equal(result.id, "new-template");
   assert.ok(calls.every(c => !c.url.endsWith("/export/original")));
 });
@@ -29,4 +29,16 @@ test("a failed source export does not create an empty template", async () => {
   const api = load({ get: async () => { throw new Error("Forbidden"); }, post: async () => { posts++; } });
   await assert.rejects(api.prepareImportedTemplate("other-account", 1), /Forbidden/);
   assert.equal(posts, 0);
+});
+test("selected template fields use the revision/hash guarded sanitizing API", async () => {
+  const calls = [];
+  const api = load({ get: async () => { throw new Error("Must use sanitized source"); }, post: async (url, body, options) => {
+    calls.push({ url, body, options });
+    return url.endsWith("/template-document") ? new Blob(["sanitized DOCX"]) : { content: "sanitized", warning: "" };
+  } });
+  await api.prepareImportedTemplate("source", 4, { "field-id": "CUSTOMER_NAME_1" }, "verified-hash");
+  assert.equal(calls[0].url, "/api/imported-contracts/source/template-document");
+  assert.deepEqual(calls[0].body, { revision: 4, sourceSha256: "verified-hash", replacements: { "field-id": "CUSTOMER_NAME_1" } });
+  assert.equal(calls[0].options.responseType, "blob");
+  assert.equal(calls[1].url, "/api/contract-document-editor/import");
 });

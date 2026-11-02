@@ -17,6 +17,38 @@ namespace ContractManagement.Tests.Domains.Services.Contract;
 
 public sealed class DocumentLibraryTests
 {
+    [Fact]
+    public async Task PersonalTemplate_IsHiddenFromOtherActors_InListPreviewMetadataAndTrash()
+    {
+        await using var db = Db(); var id = Guid.NewGuid();
+        db.Add(new ContractEditorDocument { Id = id, EmployeeId = 10, TenantId = 1, Title = "Riêng", IsTemplate = true, IsSharedTemplate = false, Revision = 1 });
+        db.Add(new ContractEditorRevision { DocumentId = id, Revision = 1, Title = "Riêng", Content = ContractTermRichText.Prefix + "{\"blocks\":[]}" });
+        await db.SaveChangesAsync(); var other = Controller(db, 20);
+        Assert.Equal(0, Data(await other.List(kind: "template")).GetProperty("totalCount").GetInt32());
+        Assert.IsType<NotFoundResult>(await other.Preview("template", id));
+        Assert.IsType<NotFoundResult>(await other.Export("template", id, "docx", 1));
+        Assert.IsType<NotFoundResult>(await other.Update("template", id, new() { DisplayName = "Bad" }, default));
+        Assert.IsType<NotFoundResult>(await other.Delete("template", id, 1));
+        Assert.IsType<OkObjectResult>(await Controller(db).Delete("template", id, 1));
+        Assert.IsType<OkObjectResult>(await Controller(db).Restore("template", id, 2));
+    }
+
+    [Fact]
+    public async Task Export_UsesRequestedSavedRevision_NotLatestHeadOrClientContent()
+    {
+        await using var db = Db(); var id = Guid.NewGuid();
+        string Content(string value) => ContractTermRichText.Prefix + JsonSerializer.Serialize(new { blocks = new[] { new { type = "paragraph", runs = new[] { new { text = value } } } } });
+        db.Add(new ContractEditorDocument { Id = id, EmployeeId = 10, TenantId = 1, Title = "Bản mới", Revision = 2 });
+        db.AddRange(new ContractEditorRevision { DocumentId = id, Revision = 1, Title = "v1", Content = Content("Bản đã lưu 1") }, new ContractEditorRevision { DocumentId = id, Revision = 2, Title = "v2", Content = Content("Bản đã lưu 2") });
+        await db.SaveChangesAsync(); var api = Controller(db);
+        var file = Assert.IsType<FileContentResult>(await api.Export("editor", id, "docx", 1));
+        using var stream = new MemoryStream(file.FileContents);
+        using var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(stream, false);
+        Assert.Contains("Bản đã lưu 1", doc.MainDocumentPart!.Document.InnerText);
+        Assert.DoesNotContain("Bản đã lưu 2", doc.MainDocumentPart!.Document.InnerText);
+        Assert.Equal("1", api.Response.Headers["X-Document-Revision"].ToString());
+        Assert.IsType<NotFoundResult>(await api.Export("editor", id, "docx", 999));
+    }
     private static DbDtctechContext Db() => new(new DbContextOptionsBuilder<DbDtctechContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
     private static DocumentLibraryController Controller(DbDtctechContext db, int actor = 10, int tenantId = 1, IContractTemplatePdfRenderer? renderer = null)
     {

@@ -34,12 +34,18 @@ namespace ContractManagement.Infrastructure.Migrations.Application
                     b.Property<bool>("IsArchived")
                         .HasColumnType("bit");
 
+                    b.Property<bool>("IsSharedTemplate")
+                        .HasColumnType("bit");
+
                     b.Property<bool>("IsTemplate")
                         .HasColumnType("bit");
 
                     b.Property<int>("Revision")
                         .IsConcurrencyToken()
                         .HasColumnType("int");
+
+                    b.Property<Guid?>("SourceAssetId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<int>("TenantId")
                         .HasColumnType("int");
@@ -86,6 +92,37 @@ namespace ContractManagement.Infrastructure.Migrations.Application
                     b.HasKey("DocumentId", "Revision");
 
                     b.ToTable("tbl_ContractEditorRevision", (string)null);
+                });
+
+            modelBuilder.Entity("ContractManagement.Infrastructure.Persistence.Application.Models.ContractEditorSourceAsset", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<byte[]>("Docx")
+                        .IsRequired()
+                        .HasColumnType("varbinary(max)");
+
+                    b.Property<int>("EmployeeId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<int>("TenantId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "EmployeeId");
+
+                    b.ToTable("tbl_ContractEditorSourceAsset", (string)null);
                 });
 
             modelBuilder.Entity("ContractManagement.Infrastructure.Persistence.Application.Models.DocumentLibraryEntry", b =>

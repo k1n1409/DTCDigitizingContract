@@ -7,7 +7,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Node, isProseMirrorCellSelection, type JSONContent, type Editor } from "@tiptap/core";
+import { Extension, Node, isProseMirrorCellSelection, type JSONContent, type Editor } from "@tiptap/core";
 import { editorFieldLabel, tokenizeEditorFields } from "@/lib/editor-smart-fields";
 import { TableCell, TableHeader, TableKit } from "@tiptap/extension-table";
 import TextAlign from "@tiptap/extension-text-align";
@@ -59,6 +59,9 @@ import {
   type ContractRichTextVerticalAlignment,
 } from "@/lib/contract-rich-text";
 import { cn } from "@/lib/utils";
+import { closeHistory } from "@tiptap/pm/history";
+import { DocumentFindReplace, type FindOptions } from "@/components/contracts/document-find-replace";
+import { richDocumentMatches, replaceRichDocumentMatches } from "@/lib/rich-document-find";
 
 interface ContractRichTextEditorProps {
   id?: string;
@@ -76,6 +79,17 @@ interface ContractRichTextEditorProps {
 }
 
 const DEFAULT_EDITOR_CONTENT_WIDTH = 800;
+const DocumentSourceKeys = Extension.create({ name: "documentSourceKeys", addGlobalAttributes() { return [{ types: ["paragraph", "table"], attributes: { sourceKey: { default: null, keepOnSplit: false, parseHTML: element => element.getAttribute("data-word-source"), renderHTML: attributes => attributes.sourceKey ? { "data-word-source": attributes.sourceKey } : {} } } }]; } });
+const PreservedWordBlock = Node.create({
+  name: "preservedWordBlock", group: "block", atom: true, draggable: true,
+  addAttributes() { return { sourceKey: { default: null, parseHTML: element => element.getAttribute("data-word-source") }, label: { default: "Khối Word gốc", parseHTML: element => element.getAttribute("data-word-label") }, previewText: { default: "", parseHTML: element => element.getAttribute("data-word-text") || "" }, previewImage: { default: null, parseHTML: element => element.querySelector("img")?.getAttribute("src") || null } }; },
+  parseHTML() { return [{ tag: "div[data-preserved-word]" }]; },
+  renderHTML({ node }) {
+    const preview = typeof node.attrs.previewImage === "string" && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(node.attrs.previewImage) ? node.attrs.previewImage : null;
+    return ["div", { "data-preserved-word": "true", "data-word-source": node.attrs.sourceKey, "data-word-label": node.attrs.label, "data-word-text": node.attrs.previewText, contenteditable: "false", class: "my-4 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 p-4 text-slate-800 cursor-grab", title: "Giữ nguyên bố cục gốc. Có thể di chuyển hoặc xóa cả khối; xem PDF để đối chiếu." }, ["div", { class: "mb-2 text-sm font-semibold" }, String(node.attrs.label)], ...(preview ? [["img", { src: preview, alt: "Ảnh gốc trong tài liệu", style: "max-width:100%;max-height:320px;object-fit:contain" }]] : []), ["p", { class: "whitespace-pre-wrap text-sm" }, String(node.attrs.previewText).slice(0, 1000)], ["small", { class: "mt-2 block text-slate-500" }, "Bố cục được giữ trong bản Word/PDF · Không chỉnh trực tiếp trong khối này."]];
+  },
+});
+const DocumentPageBreak = Extension.create({ name: "documentPageBreak", addGlobalAttributes() { return [{ types: ["paragraph"], attributes: { pageBreakBefore: { default: false, parseHTML: element => element.dataset.pageBreakBefore === "true", renderHTML: attributes => attributes.pageBreakBefore ? { "data-page-break-before": "true", style: "break-before:page;border-top:1px dashed #94a3b8;padding-top:24px;margin-top:24px" } : {} } } }]; } });
 const insertStructured = (editor: Editor, content: JSONContent[], position = editor.state.selection.from) => {
   // The persisted contract schema does not allow nested tables.
   if (content.some(node => node.type === "table")) {
@@ -192,10 +206,11 @@ const toTiptapContent = (
 ): JSONContent => ({
   type: "doc",
   content: parseContractRichText(value).blocks.map((block) => {
+    if (block.type === "paragraph" && block.locked) return { type: "preservedWordBlock", attrs: { sourceKey: block.sourceKey, label: block.label, previewText: block.runs.map(run => run.text).join(""), previewImage: block.previewImage } };
     if (block.type === "paragraph") {
       return {
         type: "paragraph",
-        attrs: { textAlign: block.alignment ?? "left" },
+        attrs: { textAlign: block.alignment ?? "left", pageBreakBefore: block.pageBreakBefore ?? false, sourceKey: block.sourceKey ?? null },
         content: runsToTiptapContent(block.runs),
       };
     }
@@ -207,6 +222,7 @@ const toTiptapContent = (
     const starts = cellStartColumns(block.rows, columnWidths.length);
     return {
       type: "table",
+      attrs: { sourceKey: block.sourceKey ?? null },
       content: block.rows.map((row, rowIndex) => ({
         type: "tableRow",
         content: row.cells.map((cell, cellIndex) => ({
@@ -222,7 +238,7 @@ const toTiptapContent = (
           },
           content: cell.paragraphs.map((paragraph) => ({
             type: "paragraph",
-            attrs: { textAlign: paragraph.alignment ?? "left" },
+            attrs: { textAlign: paragraph.alignment ?? "left", pageBreakBefore: paragraph.pageBreakBefore ?? false, sourceKey: paragraph.sourceKey ?? null },
             content: runsToTiptapContent(paragraph.runs),
           })),
         })),
@@ -298,7 +314,9 @@ const tiptapParagraph = (paragraph: JSONContent): ContractRichTextParagraph => {
   const alignment = paragraphAlignment(paragraph);
   return {
     runs: tiptapInlineToRuns(paragraph.content),
+    ...(paragraph.attrs?.sourceKey ? { sourceKey: String(paragraph.attrs.sourceKey) } : {}),
     ...(alignment ? { alignment } : {}),
+    ...(paragraph.attrs?.pageBreakBefore ? { pageBreakBefore: true } : {}),
   };
 };
 
@@ -334,6 +352,7 @@ const tablePixelWidths = (table: JSONContent) => {
 const fromTiptapDocument = (document: JSONContent) => {
   const blocks: ContractRichTextBlock[] = [];
   document.content?.forEach((node) => {
+    if (node.type === "preservedWordBlock") { blocks.push({ type: "paragraph", locked: true, sourceKey: String(node.attrs?.sourceKey || ""), label: String(node.attrs?.label || "Khối Word gốc"), runs: [{ text: String(node.attrs?.previewText || "") }], ...(node.attrs?.previewImage ? { previewImage: String(node.attrs.previewImage) } : {}) }); return; }
     if (node.type === "paragraph") {
       blocks.push({ type: "paragraph", ...tiptapParagraph(node) });
       return;
@@ -366,6 +385,7 @@ const fromTiptapDocument = (document: JSONContent) => {
       const pixels = tablePixelWidths(node);
       blocks.push({
         type: "table",
+        ...(node.attrs?.sourceKey ? { sourceKey: String(node.attrs.sourceKey) } : {}),
         columnWidthsBps: normalizeColumnWidthsBps(pixels),
         rows,
       });
@@ -374,8 +394,8 @@ const fromTiptapDocument = (document: JSONContent) => {
   return { blocks };
 };
 
-const fromTiptapContent = (document: JSONContent) =>
-  serializeContractRichText(fromTiptapDocument(document));
+const fromTiptapContent = (document: JSONContent, preservation?: ReturnType<typeof parseContractRichText>["preservation"]) =>
+  serializeContractRichText({ ...fromTiptapDocument(document), ...(preservation ? { preservation } : {}) });
 
 export function ContractRichTextEditor({
   id,
@@ -392,7 +412,10 @@ export function ContractRichTextEditor({
   smartFields,
 }: ContractRichTextEditorProps) {
   const smartRef = useRef(smartFields);
+  const preservationRef = useRef(parseContractRichText(value).preservation);
   const smartEnabled = !!smartFields;
+  const [find, setFind] = useState<FindOptions>({ query: "", replacement: "", matchCase: false });
+  const [matchIndex, setMatchIndex] = useState(0);
   const prepareContent = useCallback((raw?: string | null, width = DEFAULT_EDITOR_CONTENT_WIDTH) => {
     const doc = toTiptapContent(raw, width);
     return smartEnabled ? tokenizeEditorFields(doc) : doc;
@@ -478,6 +501,9 @@ export function ContractRichTextEditor({
         tableCell: false,
         tableHeader: false,
       }),
+      DocumentPageBreak,
+      DocumentSourceKeys,
+      PreservedWordBlock,
       ContractTableCell,
       ContractTableHeader,
     ],
@@ -508,7 +534,7 @@ export function ContractRichTextEditor({
       },
     },
     onUpdate: ({ editor: currentEditor }) => {
-      const nextValue = fromTiptapContent(currentEditor.getJSON());
+      const nextValue = fromTiptapContent(currentEditor.getJSON(), preservationRef.current);
       lastEmittedValue.current = nextValue;
       onChange(nextValue);
     },
@@ -543,6 +569,7 @@ export function ContractRichTextEditor({
 
   useEffect(() => {
     const nextValue = value ?? "";
+    preservationRef.current = parseContractRichText(nextValue).preservation;
     if (!editor || lastEmittedValue.current === nextValue) return;
     lastEmittedValue.current = nextValue;
     editor.commands.setContent(
@@ -561,9 +588,7 @@ export function ContractRichTextEditor({
       const nextWidth = measureEditorContentWidth(surface);
       if (Math.abs(nextWidth - editorContentWidthRef.current) < 2) return;
       editorContentWidthRef.current = nextWidth;
-      const current = serializeContractRichText(
-        fromTiptapDocument(editor.getJSON()),
-      );
+      const current = fromTiptapContent(editor.getJSON(), preservationRef.current);
       editor.chain().setMeta("addToHistory", false).setContent(prepareContent(current, nextWidth), {
         emitUpdate: false,
       }).run();
@@ -630,6 +655,22 @@ export function ContractRichTextEditor({
     },
   }) ?? { inTable: false, selectedCellCount: 0, canMerge: false };
 
+  const matches = useEditorState({ editor, selector: ({ editor: currentEditor }) => {
+    return currentEditor ? richDocumentMatches(currentEditor.state.doc, find.query, find.matchCase) : [];
+  } }) || [];
+  const activeMatch = Math.min(matchIndex, Math.max(0, matches.length - 1));
+  const navigateMatch = (direction: number) => {
+    if (!editor || !matches.length) return;
+    const index = (activeMatch + direction + matches.length) % matches.length;
+    setMatchIndex(index); editor.chain().focus().setTextSelection(matches[index]).scrollIntoView().run();
+  };
+  const replaceMatches = (all: boolean) => {
+    if (!editor || !matches.length) return;
+    const chosen = all ? matches : [matches[activeMatch]];
+    editor.view.dispatch(replaceRichDocumentMatches(editor.state, chosen, find.replacement).scrollIntoView());
+    editor.view.dispatch(closeHistory(editor.state.tr));
+    setMatchIndex(0);
+  };
   if (!editor) {
     return <div className="h-64 animate-pulse rounded-md border bg-muted/30" />;
   }
@@ -650,7 +691,9 @@ export function ContractRichTextEditor({
         isFullscreen && "flex min-h-0 flex-1 flex-col rounded-none border-0",
       )}
     >
+      {smartEnabled && <DocumentFindReplace value={find} onChange={value => { setFind(value); setMatchIndex(0); }} count={matches.length} index={activeMatch} onNavigate={navigateMatch} onReplace={replaceMatches} />}
       <div className="flex shrink-0 flex-wrap items-center gap-1 border-b bg-muted/40 p-1.5">
+        {smartEnabled && <Button type="button" size="sm" variant={editor.isActive("paragraph", { pageBreakBefore: true }) ? "secondary" : "ghost"} title="Bật/tắt ngắt trang trước đoạn đang chọn" onClick={() => editor.chain().focus().updateAttributes("paragraph", { pageBreakBefore: !editor.isActive("paragraph", { pageBreakBefore: true }) }).run()}>Ngắt trang</Button>}
         <Button
           type="button"
           variant={editor.isActive("bold") ? "secondary" : "ghost"}

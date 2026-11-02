@@ -28,6 +28,43 @@ public sealed class ImportedContractsController(DbDtctechContext db, ICurrentTen
         public int ExpectedRevision { get; set; }
         public string SourceSha256 { get; set; } = "";
     }
+    public sealed class TemplateDocumentRequest
+    {
+        public int Revision { get; set; }
+        public string SourceSha256 { get; set; } = "";
+        public Dictionary<Guid, string> Replacements { get; set; } = [];
+    }
+
+    [HttpPost("{id:guid}/template-document")]
+    public async Task<IActionResult> TemplateDocument(Guid id, TemplateDocumentRequest request, CancellationToken ct = default)
+    {
+        // This endpoint only transforms the caller's own document. Publishing a
+        // tenant-shared template is separately authorized by ContractEditorDrafts.
+        var document = await Owned.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, ct);
+        if (document is null) return NotFound();
+        if (!Intact(document) || document.Sha256 != request.SourceSha256) return Conflict(ApiResponse<object>.Fail("File gốc đã thay đổi. Mở lại trước khi tạo mẫu."));
+        var snapshot = await db.Set<ImportedContractRevision>().AsNoTracking().SingleOrDefaultAsync(x => x.DocumentId == id && x.Revision == request.Revision, ct);
+        if (snapshot is null) return NotFound();
+        if (request.Replacements is null) return BadRequest();
+        try {
+            var result = LegacyWordDocument.TemplateDocument(document.OriginalDocx, Parse(snapshot), request.Replacements);
+            Response.Headers.CacheControl = "no-store";
+            return File(result, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "reviewed-template.docx");
+        } catch (ArgumentException ex) { return BadRequest(ApiResponse<object>.Fail(ex.Message)); }
+    }
+
+    [HttpGet("{id:guid}/original-preview")]
+    public async Task<IActionResult> OriginalPreview(Guid id, CancellationToken ct = default)
+    {
+        var document = await Owned.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, ct);
+        if (document is null) return NotFound();
+        if (!Intact(document)) return Conflict(ApiResponse<object>.Fail("File gốc không khớp hash."));
+        Response.Headers.CacheControl = "no-store";
+        return await ContractManagement.Domains.Services.Contract.DocumentPreviewCache.GetAsync($"original-preview:{tenant.GetRequiredTenant().TenantId}:{Actor}:{id}:{document.Sha256}", async () => {
+            try { return File(await pdf.ConvertPreviewToPdfAsync(document.OriginalDocx, ct), "application/pdf"); }
+            catch (ContractTemplatePdfRenderingException ex) { return StatusCode(503, ApiResponse<object>.Fail(ex.Message)); }
+        }, ct);
+    }
     private int Actor => HttpContext.Session.GetInt32("EmployeeId") ?? throw new UnauthorizedAccessException();
     private IQueryable<ImportedContractDocument> Owned => db.Set<ImportedContractDocument>().Where(x => x.EmployeeId == Actor && x.TenantId == tenant.GetRequiredTenant().TenantId && !x.IsArchived);
     private static List<LegacyField> Parse(ImportedContractRevision revision) => JsonSerializer.Deserialize<List<LegacyField>>(revision.Fields)!;
@@ -60,10 +97,12 @@ public sealed class ImportedContractsController(DbDtctechContext db, ICurrentTen
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> Read(Guid id, int? revision = null, CancellationToken ct = default)
     {
+        Response.Headers.CacheControl = "no-store";
         var document = await Owned.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, ct); if (document is null) return NotFound();
         if (!Intact(document)) return Conflict(ApiResponse<object>.Fail("File gốc không khớp hash. Dừng xử lý và liên hệ quản trị."));
         var snapshot = await db.Set<ImportedContractRevision>().AsNoTracking().SingleOrDefaultAsync(x => x.DocumentId == id && x.Revision == (revision ?? document.Revision), ct); if (snapshot is null) return NotFound();
-        return Ok(ApiResponse<object>.Ok(new { document.Id, document.Name, sourceSha256 = document.Sha256, sizeBytes = document.OriginalDocx.Length, document.CreatedAtUtc, currentRevision = document.Revision, snapshot.Revision, fields = Parse(snapshot), blocks = LegacyWordDocument.Read(document.OriginalDocx), warning = "Bản rà soát thể hiện văn bản phần thân, không phải bố cục Word/PDF. Vùng chứa trường Word tự động, tab/xuống dòng đặc biệt, ảnh hoặc tracked changes chỉ được xem. Header/footer và ảnh giữ trong bản xuất nhưng chưa chỉnh tại đây. Bản chỉnh sửa không có giá trị thay thế chữ ký/phê duyệt của bản gốc." }));
+        var blocks = LegacyWordDocument.Read(document.OriginalDocx);
+        return Ok(ApiResponse<object>.Ok(new { document.Id, document.Name, sourceSha256 = document.Sha256, sizeBytes = document.OriginalDocx.Length, document.CreatedAtUtc, currentRevision = document.Revision, snapshot.Revision, fields = Parse(snapshot), blocks, layout = LegacyWordDocument.LayoutReport(document.OriginalDocx, blocks), warning = "Bản rà soát thể hiện văn bản phần thân, không phải bố cục Word/PDF. Vùng chứa trường Word tự động, tab/xuống dòng đặc biệt, ảnh hoặc tracked changes chỉ được xem. Header/footer và ảnh giữ trong bản xuất nhưng chưa chỉnh tại đây. Bản chỉnh sửa không có giá trị thay thế chữ ký/phê duyệt của bản gốc." }));
     }
 
     [HttpPut("{id:guid}"), RequestSizeLimit(5 * 1024 * 1024)]

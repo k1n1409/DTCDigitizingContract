@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { getApiErrorCode } from "@/lib/api-error";
 import { RBAC_PERMISSION_VERSION } from "@/lib/rbac";
 import { NotificationProvider } from "@/components/notifications/notification-provider";
+import { DocumentWorkspaceViewContext } from "@/components/contracts/document-workspace-view";
 
 export default function ProtectedLayout({
   children,
@@ -19,10 +20,13 @@ export default function ProtectedLayout({
   const [isChecking, setIsChecking] = useState(true);
   const [checkError, setCheckError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
+  const [workspaceExpanded, setWorkspaceExpanded] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
   const setUser = useAuthStore((state) => state.setUser);
   const user = useAuthStore((state) => state.user);
+  const isDocumentWorkspace = pathname === "/contract-import" || pathname === "/contract-editor";
+  const expanded = workspaceExpanded && isDocumentWorkspace;
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -106,15 +110,16 @@ export default function ProtectedLayout({
   }
 
   return (
+    <DocumentWorkspaceViewContext.Provider value={{ expanded, setExpanded: setWorkspaceExpanded }}>
     <NotificationProvider key={`${user.tenantId}:${user.employeeId}`}
       tenantId={user.tenantId} employeeId={user.employeeId}>
-    <div className="flex flex-row h-screen w-screen overflow-hidden bg-background">
-      <Sidebar />
+    <div data-document-shell={isDocumentWorkspace || undefined} className="flex flex-row h-screen w-screen overflow-hidden bg-background">
+      <div className={expanded ? "hidden" : "contents"}><Sidebar /></div>
       <main className="relative z-10 flex min-w-0 grow flex-col overflow-hidden">
         <div className="flex min-w-0 grow flex-col overflow-hidden">
           {children}
         </div>
-        <footer className="z-20 mt-auto flex shrink-0 items-center justify-between border-t border-border bg-card/50 px-3 py-2.5 text-xs text-muted-foreground backdrop-blur-sm sm:px-6">
+        <footer className={`${expanded ? "hidden" : "flex"} z-20 mt-auto shrink-0 items-center justify-between border-t border-border bg-card/50 px-3 py-2.5 text-xs text-muted-foreground backdrop-blur-sm sm:px-6`}>
           <div className="truncate">
             Copyright &copy; 2026 DTC.,Ltd. All rights reserved.
           </div>
@@ -125,5 +130,6 @@ export default function ProtectedLayout({
       </main>
     </div>
     </NotificationProvider>
+    </DocumentWorkspaceViewContext.Provider>
   );
 }
