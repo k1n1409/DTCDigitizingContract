@@ -9,7 +9,8 @@ public sealed class EmployeePermissionCatalogTests
     [
         [EmployeeType.Sale, Expected(RbacPermissions.CustomerManage)],
         [EmployeeType.Marketing, Expected(RbacPermissions.CustomerManage)],
-        [EmployeeType.AdminOfficer, ExpectedAdministration(RbacPermissions.ContractApprovalReview)],
+        [EmployeeType.AdminOfficer, ExpectedAdministration(RbacPermissions.ContractApprovalReview).Where(x =>
+            x != RbacPermissions.ContractSigningManage).ToArray()],
         [EmployeeType.Technical, Expected(RbacPermissions.ContractExecutionRead)],
         [EmployeeType.Accountant, ExpectedAdministration().Where(x =>
             x != RbacPermissions.ContractSigningManage).ToArray()],
@@ -74,6 +75,10 @@ public sealed class EmployeePermissionCatalogTests
         Assert.Contains(RbacPermissions.ContractAuditReadTenant, permissions);
         Assert.Contains(RbacPermissions.EmployeeManage, permissions);
         Assert.Contains(RbacPermissions.ContractReadTenant, permissions);
+        Assert.Contains(RbacPermissions.CustomerManage, permissions);
+        Assert.Contains(RbacPermissions.ContractApprovalReview, permissions);
+        Assert.DoesNotContain(RbacPermissions.ContractSigningManage, permissions);
+        Assert.DoesNotContain(RbacPermissions.ContractApprovalDecide, permissions);
     }
 
     [Fact]

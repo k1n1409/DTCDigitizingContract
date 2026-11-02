@@ -95,6 +95,12 @@ public sealed class LibreOfficeContractTemplatePdfRenderer
                     "LibreOffice vượt quá thời gian tạo PDF cho phép.");
             }
 
+            catch (OperationCanceledException)
+            {
+                TryKill(process);
+                throw;
+            }
+
             var outputPath = Path.Combine(outputDirectory, "preview.pdf");
             if (process.ExitCode != 0 || !System.IO.File.Exists(outputPath))
             {

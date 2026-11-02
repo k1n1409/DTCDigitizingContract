@@ -139,7 +139,7 @@ export default function TenantsPage() {
   const [form, setForm] = useState(initialForm);
   const passwordRules = getAccountPasswordRules(form.employeePassword);
   const passwordChecklist = [
-    { label: "Độ dài từ 12 đến 100 ký tự", satisfied: passwordRules.hasLength },
+    { label: "Độ dài từ 8 đến 100 ký tự", satisfied: passwordRules.hasLength },
     {
       label: "Chứa ít nhất một chữ số (0–9)",
       satisfied: passwordRules.hasNumber,
@@ -759,11 +759,11 @@ export default function TenantsPage() {
                       <Input
                         id="employee-password"
                         required
-                        minLength={12}
+                        minLength={8}
                         maxLength={100}
                         aria-describedby="employee-password-rules"
                         type={showPassword ? "text" : "password"}
-                        placeholder="Tối thiểu 12 ký tự"
+                        placeholder="Tối thiểu 8 ký tự"
                         value={form.employeePassword}
                         onChange={(event) =>
                           updateField("employeePassword", event.target.value)

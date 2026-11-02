@@ -92,7 +92,8 @@ public static class ContractTermRichText
         && runs.Count <= 2_000
         && runs.All(run =>
             run.Text is not null
-            && (run.FontSize is null or >= 8 and <= 36));
+            && (run.FontSize is null or >= 8 and <= 36)
+            && (run.FontFamily is null or "Times New Roman" or "Arial" or "Calibri"));
 
     private static bool IsCellValid(ContractTermRichTextCell cell)
     {
@@ -165,7 +166,7 @@ public static class ContractTermRichText
     }
 
     private static bool IsAlignmentValid(string? alignment) =>
-        alignment is null or "left" or "center" or "right";
+        alignment is null or "left" or "center" or "right" or "justify";
 
     private static bool IsVerticalAlignmentValid(string? alignment) =>
         alignment is null or "top" or "center" or "bottom";
@@ -214,4 +215,6 @@ public sealed class ContractTermRichTextRun
     public bool Italic { get; set; }
     public bool Underline { get; set; }
     public int? FontSize { get; set; }
+    public string? FontFamily { get; set; }
+    public bool Strike { get; set; }
 }

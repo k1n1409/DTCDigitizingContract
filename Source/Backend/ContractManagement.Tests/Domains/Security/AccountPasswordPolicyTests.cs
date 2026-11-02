@@ -16,7 +16,12 @@ public sealed class AccountPasswordPolicyTests
 {
     [Theory]
     [InlineData("Abcdefghij12", true)]
-    [InlineData("Abcdefghij1", false)]
+    [InlineData("Abcdefghij1", true)]
+    [InlineData("Abcdef12", true)]
+    [InlineData("Abcde12", false)]
+    [InlineData("abcdef12", false)]
+    [InlineData("ABCDEF12", false)]
+    [InlineData("Abcdefgh", false)]
     [InlineData("abcdefghij12", false)]
     [InlineData("ABCDEFGHIJ12", false)]
     [InlineData("Abcdefghijkl", false)]

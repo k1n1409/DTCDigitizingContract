@@ -2,14 +2,17 @@
 
 import {
   useEffect,
+  useCallback,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { isProseMirrorCellSelection, type JSONContent } from "@tiptap/core";
+import { Node, isProseMirrorCellSelection, type JSONContent, type Editor } from "@tiptap/core";
+import { editorFieldLabel, tokenizeEditorFields } from "@/lib/editor-smart-fields";
 import { TableCell, TableHeader, TableKit } from "@tiptap/extension-table";
 import TextAlign from "@tiptap/extension-text-align";
-import { FontSize, TextStyle } from "@tiptap/extension-text-style";
+import { FontSize, FontFamily, TextStyle } from "@tiptap/extension-text-style";
+import { CONTRACT_SNIPPET_MIME } from "@/lib/contract-editor-snippets";
 import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import {
@@ -17,6 +20,9 @@ import {
   AlignCenter,
   AlignLeft,
   AlignRight,
+  AlignJustify,
+  Strikethrough,
+  RemoveFormatting,
   ChevronDown,
   Combine,
   Italic,
@@ -29,6 +35,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { RoundedSelect } from "@/components/ui/custom/rounded-select";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
@@ -60,9 +67,25 @@ interface ContractRichTextEditorProps {
   placeholder?: string;
   ariaLabel?: string;
   className?: string;
+  insertRequest?: { id: string; content: string };
+  onInsertHandled?: (id: string) => void;
+  historyRequest?: { id: string; action: "undo" | "redo" };
+  onHistoryHandled?: (id: string) => void;
+  onHistoryStateChange?: (state: { canUndo: boolean; canRedo: boolean }) => void;
+  smartFields?: { bindings: Record<string, string>; onSelect: (key: string, detach: (replacement?: string) => void) => void };
 }
 
 const DEFAULT_EDITOR_CONTENT_WIDTH = 800;
+const insertStructured = (editor: Editor, content: JSONContent[], position = editor.state.selection.from) => {
+  // The persisted contract schema does not allow nested tables.
+  if (content.some(node => node.type === "table")) {
+    const resolved = editor.state.doc.resolve(position);
+    for (let depth = resolved.depth; depth > 0; depth--) {
+      if (resolved.node(depth).type.name === "table") { position = resolved.after(depth); break; }
+    }
+  }
+  return editor.chain().focus().insertContentAt(position, content).run();
+};
 const EDITOR_HORIZONTAL_PADDING = 24;
 const EDITOR_VIEWPORT_GUTTER = 16;
 
@@ -124,10 +147,11 @@ const runsToTiptapContent = (runs: ContractRichTextRun[]): JSONContent[] => {
     if (run.bold) marks.push({ type: "bold" });
     if (run.italic) marks.push({ type: "italic" });
     if (run.underline) marks.push({ type: "underline" });
-    if (run.fontSize) {
+    if (run.strike) marks.push({ type: "strike" });
+    if (run.fontSize || run.fontFamily) {
       marks.push({
         type: "textStyle",
-        attrs: { fontSize: `${run.fontSize}pt` },
+        attrs: { ...(run.fontSize ? { fontSize: `${run.fontSize}pt` } : {}), ...(run.fontFamily ? { fontFamily: run.fontFamily } : {}) },
       });
     }
 
@@ -214,6 +238,8 @@ const appendRun = (
   italic?: boolean,
   underline?: boolean,
   fontSize?: number,
+  fontFamily?: string,
+  strike?: boolean,
 ) => {
   if (!text) return;
   const run: ContractRichTextRun = { text };
@@ -221,13 +247,15 @@ const appendRun = (
   if (italic) run.italic = true;
   if (underline) run.underline = true;
   if (fontSize) run.fontSize = fontSize;
+  if (fontFamily) run.fontFamily = fontFamily;
+  if (strike) run.strike = true;
   const previous = runs.at(-1);
   if (
     previous &&
     previous.bold === run.bold &&
     previous.italic === run.italic &&
     previous.underline === run.underline &&
-    previous.fontSize === run.fontSize
+    previous.fontSize === run.fontSize && previous.fontFamily === run.fontFamily && previous.strike === run.strike
   ) {
     previous.text += run.text;
   } else {
@@ -242,7 +270,8 @@ const tiptapInlineToRuns = (nodes?: JSONContent[]) => {
       appendRun(runs, "\n");
       return;
     }
-    if (node.type !== "text" || !node.text) return;
+    const text = node.type === "smartField" ? `{{${node.attrs?.fieldKey}}}` : node.text;
+    if ((node.type !== "text" && node.type !== "smartField") || !text) return;
     const bold = node.marks?.some((mark) => mark.type === "bold");
     const italic = node.marks?.some((mark) => mark.type === "italic");
     const underline = node.marks?.some((mark) => mark.type === "underline");
@@ -252,7 +281,8 @@ const tiptapInlineToRuns = (nodes?: JSONContent[]) => {
       typeof fontSizeValue === "string"
         ? Number(fontSizeValue.replace("pt", ""))
         : undefined;
-    appendRun(runs, node.text, bold, italic, underline, fontSize);
+    const fontFamily = node.marks?.find(mark => mark.type === "textStyle")?.attrs?.fontFamily;
+    appendRun(runs, text, bold, italic, underline, fontSize, typeof fontFamily === "string" ? fontFamily : undefined, node.marks?.some(mark => mark.type === "strike"));
   });
   return runs;
 };
@@ -261,7 +291,7 @@ const paragraphAlignment = (
   paragraph: JSONContent,
 ): ContractRichTextAlignment | undefined => {
   const value = paragraph.attrs?.textAlign;
-  return value === "center" || value === "right" ? value : undefined;
+  return value === "center" || value === "right" || value === "justify" ? value : undefined;
 };
 
 const tiptapParagraph = (paragraph: JSONContent): ContractRichTextParagraph => {
@@ -354,7 +384,19 @@ export function ContractRichTextEditor({
   placeholder = "Nhập nội dung điều khoản...",
   ariaLabel = "Nội dung điều khoản",
   className,
+  insertRequest,
+  onInsertHandled,
+  historyRequest,
+  onHistoryHandled,
+  onHistoryStateChange,
+  smartFields,
 }: ContractRichTextEditorProps) {
+  const smartRef = useRef(smartFields);
+  const smartEnabled = !!smartFields;
+  const prepareContent = useCallback((raw?: string | null, width = DEFAULT_EDITOR_CONTENT_WIDTH) => {
+    const doc = toTiptapContent(raw, width);
+    return smartEnabled ? tokenizeEditorFields(doc) : doc;
+  }, [smartEnabled]);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [resizeHint, setResizeHint] = useState<{
     left: number;
@@ -365,9 +407,49 @@ export function ContractRichTextEditor({
   const editorSurfaceRef = useRef<HTMLDivElement>(null);
   const editorContentWidthRef = useRef(DEFAULT_EDITOR_CONTENT_WIDTH);
   const lastEmittedValue = useRef(value ?? "");
+  const lastInsert = useRef("");
+  const lastHistory = useRef("");
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
+      Node.create({
+        name: "smartField", group: "inline", inline: true, atom: true,
+        addAttributes: () => ({ fieldKey: { default: "" } }),
+        parseHTML: () => [],
+        renderHTML: ({ node }) => ["span", {}, `{{${node.attrs.fieldKey}}}`],
+        renderText: ({ node }) => `{{${node.attrs.fieldKey}}}`,
+        addNodeView() {
+          return ({ node, editor, getPos }) => {
+            const dom = document.createElement("span");
+            const key = String(node.attrs.fieldKey);
+            dom.dataset.editorField = key;
+            dom.contentEditable = "false";
+            dom.setAttribute("role", "button"); dom.tabIndex = 0;
+            dom.className = "inline-block cursor-pointer rounded border border-primary/30 bg-primary/5 px-1 text-primary whitespace-pre-wrap";
+            const refresh = () => {
+              const value = smartRef.current?.bindings[key];
+              dom.textContent = value?.trim() ? value : `［${editorFieldLabel(key)}］`;
+              dom.title = `${editorFieldLabel(key)} · Bấm để điền hoặc chỉnh sửa`;
+              dom.setAttribute("aria-label", dom.title);
+              dom.dataset.empty = value?.trim() ? "false" : "true";
+            };
+            refresh(); editor.on("transaction", refresh);
+            const select = () => {
+              const pos = getPos();
+              smartRef.current?.onSelect(key, (replacement?: string) => {
+              if (typeof pos !== "number" || editor.state.doc.nodeAt(pos)?.attrs.fieldKey !== key) return;
+              const text = replacement === undefined ? smartRef.current?.bindings[key] || "" : replacement;
+              const range = { from: pos, to: pos + node.nodeSize };
+              if (text) editor.chain().focus().insertContentAt(range, { type: "text", text, marks: node.marks.map(m => m.toJSON()) }).run();
+              else editor.chain().focus().deleteRange(range).run();
+              });
+            };
+            dom.addEventListener("click", select);
+            dom.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(); } });
+            return { dom, stopEvent: () => true, ignoreMutation: () => true, destroy: () => { editor.off("transaction", refresh); } };
+          };
+        },
+      }),
       StarterKit.configure({
         heading: false,
         blockquote: false,
@@ -378,13 +460,13 @@ export function ContractRichTextEditor({
         codeBlock: false,
         link: false,
         horizontalRule: false,
-        strike: false,
       }),
       TextStyle,
       FontSize,
+      FontFamily,
       TextAlign.configure({
         types: ["paragraph"],
-        alignments: ["left", "center", "right"],
+        alignments: ["left", "center", "right", "justify"],
         defaultAlignment: "left",
       }),
       TableKit.configure({
@@ -399,8 +481,20 @@ export function ContractRichTextEditor({
       ContractTableCell,
       ContractTableHeader,
     ],
-    content: toTiptapContent(value, DEFAULT_EDITOR_CONTENT_WIDTH),
+    content: prepareContent(value, DEFAULT_EDITOR_CONTENT_WIDTH),
     editorProps: {
+      handleDrop(view, event) {
+        if (!event.dataTransfer?.types.includes(CONTRACT_SNIPPET_MIME)) return false;
+        event.preventDefault();
+        const raw = event.dataTransfer.getData(CONTRACT_SNIPPET_MIME);
+        if (!raw || raw.length > 100000) return true;
+        try {
+          const content = prepareContent(raw, editorContentWidthRef.current).content || [];
+          const point = view.posAtCoords({ left: event.clientX, top: event.clientY });
+          if (editor) insertStructured(editor, content, point?.pos ?? view.state.selection.from);
+        } catch { /* Ignore malformed external drag data; never insert arbitrary HTML. */ }
+        return true;
+      },
       attributes: {
         id: id ?? "",
         role: "textbox",
@@ -421,16 +515,43 @@ export function ContractRichTextEditor({
   });
 
   useEffect(() => {
+    if (!editor || !onHistoryStateChange) return;
+    let previous = "";
+    const publish = () => {
+      const state = { canUndo: editor.can().undo(), canRedo: editor.can().redo() };
+      const stamp = JSON.stringify(state);
+      if (stamp !== previous) { previous = stamp; onHistoryStateChange(state); }
+    };
+    publish(); editor.on("transaction", publish);
+    return () => { editor.off("transaction", publish); };
+  }, [editor, onHistoryStateChange]);
+
+  useEffect(() => {
+    if (!editor || !historyRequest || lastHistory.current === historyRequest.id) return;
+    lastHistory.current = historyRequest.id;
+    if (historyRequest.action === "undo") editor.chain().focus().undo().run();
+    else editor.chain().focus().redo().run();
+    onHistoryHandled?.(historyRequest.id);
+  }, [editor, historyRequest, onHistoryHandled]);
+
+  useEffect(() => {
+    if (!editor || !insertRequest || lastInsert.current === insertRequest.id) return;
+    lastInsert.current = insertRequest.id;
+    insertStructured(editor, prepareContent(insertRequest.content, editorContentWidthRef.current).content || []);
+    onInsertHandled?.(insertRequest.id);
+  }, [editor, insertRequest, onInsertHandled, prepareContent]);
+
+  useEffect(() => {
     const nextValue = value ?? "";
     if (!editor || lastEmittedValue.current === nextValue) return;
     lastEmittedValue.current = nextValue;
     editor.commands.setContent(
-      toTiptapContent(nextValue, editorContentWidthRef.current),
+      prepareContent(nextValue, editorContentWidthRef.current),
       {
         emitUpdate: false,
       },
     );
-  }, [editor, value]);
+  }, [editor, value, prepareContent]);
 
   useEffect(() => {
     const surface = editorSurfaceRef.current;
@@ -443,16 +564,21 @@ export function ContractRichTextEditor({
       const current = serializeContractRichText(
         fromTiptapDocument(editor.getJSON()),
       );
-      editor.commands.setContent(toTiptapContent(current, nextWidth), {
+      editor.chain().setMeta("addToHistory", false).setContent(prepareContent(current, nextWidth), {
         emitUpdate: false,
-      });
+      }).run();
     };
 
     applyMeasuredWidth();
     const observer = new ResizeObserver(applyMeasuredWidth);
     observer.observe(surface);
     return () => observer.disconnect();
-  }, [editor, isFullscreen]);
+  }, [editor, isFullscreen, prepareContent]);
+
+  useEffect(() => {
+    smartRef.current = smartFields;
+    if (editor && smartFields) editor.view.dispatch(editor.state.tr.setMeta("smartFieldValues", true));
+  }, [editor, smartFields]);
 
   const clearResizeHint = () => {
     editorSurfaceRef.current?.classList.remove("contract-table-edge-hover");
@@ -569,7 +695,7 @@ export function ContractRichTextEditor({
               Cỡ chữ <ChevronDown className="size-3.5" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
+          <DropdownMenuContent align="start" className="rounded-xl p-1.5 [&_[role=menuitem]]:rounded-lg [&_[role=menuitem]]:text-[15px]">
             <DropdownMenuLabel>Cỡ chữ</DropdownMenuLabel>
             <DropdownMenuSeparator />
             {CONTRACT_RICH_TEXT_FONT_SIZES.map((fontSize) => (
@@ -584,11 +710,15 @@ export function ContractRichTextEditor({
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
+        <RoundedSelect aria-label="Phông chữ" className="h-9 max-w-44" value={editor.getAttributes("textStyle").fontFamily || "Times New Roman"} onValueChange={font => editor.chain().focus().setFontFamily(font).run()} options={["Times New Roman", "Arial", "Calibri"].map(font => ({ value: font, label: font }))} />
+        <Button type="button" size="icon" variant={editor.isActive("strike") ? "secondary" : "ghost"} className="size-8" aria-label="Gạch ngang" title="Gạch ngang" onClick={() => editor.chain().focus().toggleStrike().run()}><Strikethrough className="size-4" /></Button>
+        <Button type="button" size="icon" variant="ghost" className="size-8" aria-label="Xóa định dạng chữ" title="Xóa định dạng chữ" onClick={() => editor.chain().focus().unsetAllMarks().run()}><RemoveFormatting className="size-4" /></Button>
         {(
           [
             ["left", AlignLeft, "Căn trái"],
             ["center", AlignCenter, "Căn giữa"],
             ["right", AlignRight, "Căn phải"],
+            ["justify", AlignJustify, "Căn đều hai bên"],
           ] as const
         ).map(([alignment, Icon, label]) => (
           <Button
@@ -618,7 +748,7 @@ export function ContractRichTextEditor({
               <Table2 className="size-4" /> Thêm bảng
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
+          <DropdownMenuContent align="start" className="rounded-xl p-1.5 [&_[role=menuitem]]:rounded-lg [&_[role=menuitem]]:text-[15px]">
             <DropdownMenuLabel>Kích thước bảng</DropdownMenuLabel>
             <DropdownMenuSeparator />
             {[2, 3, 4].map((size) => (
@@ -665,7 +795,7 @@ export function ContractRichTextEditor({
                   Sửa bảng <ChevronDown className="size-3.5" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
+              <DropdownMenuContent align="start" className="rounded-xl p-1.5 [&_[role=menuitem]]:rounded-lg [&_[role=menuitem]]:text-[15px]">
                 <DropdownMenuLabel>Hàng và cột</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem

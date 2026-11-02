@@ -28,9 +28,8 @@ const RichRuns = ({ runs }: { runs: ContractRichTextRun[] }) =>
         className={cn(
           run.bold && "font-bold",
           run.italic && "italic",
-          run.underline && "underline",
         )}
-        style={run.fontSize ? { fontSize: `${run.fontSize}pt` } : undefined}
+        style={{ ...(run.fontSize ? { fontSize: `${run.fontSize}pt` } : {}), ...(run.fontFamily ? { fontFamily: run.fontFamily } : {}), textDecorationLine: [run.underline ? "underline" : "", run.strike ? "line-through" : ""].filter(Boolean).join(" ") || undefined }}
       >
         {content}
       </span>
@@ -38,7 +37,7 @@ const RichRuns = ({ runs }: { runs: ContractRichTextRun[] }) =>
   });
 
 const alignmentClass = (alignment?: ContractRichTextAlignment) =>
-  alignment === "center"
+  alignment === "justify" ? "text-justify" : alignment === "center"
     ? "text-center"
     : alignment === "right"
       ? "text-right"

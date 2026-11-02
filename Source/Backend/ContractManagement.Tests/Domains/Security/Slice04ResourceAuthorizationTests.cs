@@ -319,7 +319,7 @@ public sealed class Slice04ResourceAuthorizationTests
     [InlineData(EmployeeType.Marketing, false, false)]
     [InlineData(EmployeeType.Technical, false, false)]
     [InlineData(EmployeeType.Accountant, false, true)]
-    [InlineData(EmployeeType.AdminOfficer, true, true)]
+    [InlineData(EmployeeType.AdminOfficer, false, true)]
     [InlineData(EmployeeType.Manager, true, true)]
     public async Task Owner_ManagesOwnAcceptanceAndPayment_ButSigningAndCompletionFollowRole(
         EmployeeType role, bool maySign, bool mayComplete)
@@ -372,7 +372,8 @@ public sealed class Slice04ResourceAuthorizationTests
         await service.EnsureCanCompleteAsync(ContractId, AccountantEmployeeId);
         await service.EnsureCanManageAcceptanceAsync(ContractId, AdminOfficerEmployeeId);
         await service.EnsureCanManagePaymentAsync(ContractId, AdminOfficerEmployeeId);
-        await service.EnsureCanManageSigningAsync(ContractId, AdminOfficerEmployeeId);
+        await Assert.ThrowsAsync<RbacOperationException>(() =>
+            service.EnsureCanManageSigningAsync(ContractId, AdminOfficerEmployeeId));
         await service.EnsureCanCompleteAsync(ContractId, AdminOfficerEmployeeId);
     }
 

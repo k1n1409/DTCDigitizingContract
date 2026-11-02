@@ -2,7 +2,7 @@ export const CONTRACT_RICH_TEXT_PREFIX = "contract-rich-text:v4:";
 export const CONTRACT_TABLE_TOTAL_BPS = 10_000;
 export const CONTRACT_TABLE_MIN_COLUMN_BPS = 250;
 
-export const CONTRACT_RICH_TEXT_FONT_SIZES = [10, 12, 14, 18, 24, 32] as const;
+export const CONTRACT_RICH_TEXT_FONT_SIZES = [8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 24, 28, 32, 36] as const;
 
 export interface ContractRichTextRun {
   text: string;
@@ -10,9 +10,11 @@ export interface ContractRichTextRun {
   italic?: boolean;
   underline?: boolean;
   fontSize?: number;
+  fontFamily?: string;
+  strike?: boolean;
 }
 
-export type ContractRichTextAlignment = "left" | "center" | "right";
+export type ContractRichTextAlignment = "left" | "center" | "right" | "justify";
 
 export interface ContractRichTextParagraph {
   runs: ContractRichTextRun[];
@@ -68,6 +70,8 @@ const normalizeRuns = (value: unknown): ContractRichTextRun[] => {
     if (record.underline === true) run.underline = true;
     const fontSize = normalizeFontSize(record.fontSize);
     if (fontSize) run.fontSize = fontSize;
+    if (["Times New Roman", "Arial", "Calibri"].includes(String(record.fontFamily))) run.fontFamily = String(record.fontFamily);
+    if (record.strike === true) run.strike = true;
 
     const previous = result.at(-1);
     if (
@@ -75,7 +79,7 @@ const normalizeRuns = (value: unknown): ContractRichTextRun[] => {
       previous.bold === run.bold &&
       previous.italic === run.italic &&
       previous.underline === run.underline &&
-      previous.fontSize === run.fontSize
+      previous.fontSize === run.fontSize && previous.fontFamily === run.fontFamily && previous.strike === run.strike
     ) {
       previous.text += run.text;
     } else {
@@ -89,7 +93,7 @@ const normalizeRuns = (value: unknown): ContractRichTextRun[] => {
 const normalizeAlignment = (
   value: unknown,
 ): ContractRichTextAlignment | undefined =>
-  value === "center" || value === "right" ? value : undefined;
+  value === "center" || value === "right" || value === "justify" ? value : undefined;
 
 const normalizeParagraph = (value: unknown): ContractRichTextParagraph => {
   const record =
@@ -388,11 +392,13 @@ const runsToHtml = (runs: ContractRichTextRun[]) =>
   runs
     .map((run) => {
       const content = escapeHtml(run.text).replaceAll("\n", "<br>");
-      const style = run.fontSize ? ` style="font-size:${run.fontSize}pt"` : "";
+      const styles = [run.fontSize ? `font-size:${run.fontSize}pt` : "", run.fontFamily ? `font-family:${run.fontFamily}` : ""].filter(Boolean).join(";");
+      const style = styles ? ` style="${styles}"` : "";
       const formatted = `<span${style}>${content}</span>`;
       const bold = run.bold ? `<strong>${formatted}</strong>` : formatted;
       const italic = run.italic ? `<em>${bold}</em>` : bold;
-      return run.underline ? `<u>${italic}</u>` : italic;
+      const underline = run.underline ? `<u>${italic}</u>` : italic;
+      return run.strike ? `<s>${underline}</s>` : underline;
     })
     .join("");
 

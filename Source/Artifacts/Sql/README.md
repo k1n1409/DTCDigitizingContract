@@ -1,6 +1,6 @@
 # Seed dữ liệu test cho tenant DB mới
 
-Cập nhật theo schema đến `20261023111646_ContractAdministrativeReviewRbac` (23/10/2026).
+Cập nhật theo schema đến `20261028092153_DocumentLibraryTrash` (28/10/2026). Các migration editor/rà soát chỉ thêm bảng độc lập; script seed tiếp tục kiểm tra database đã cập nhật đủ trước khi thêm dữ liệu.
 
 Ngày ký thực tế nghiệm thu lưu riêng ở `tbl_ContractAcceptanceEvidence.SignDate` và được nhập khi tải bản ký mới. Migration không lấy ngày upload để điền cho bản ký cũ, không đổi các mốc thanh toán đã kích hoạt trước đó.
 

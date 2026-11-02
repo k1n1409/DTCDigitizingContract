@@ -1,0 +1,79 @@
+"use client";
+import { useEffect, useState } from "react";
+import { Search, Star, Folder, Plus, Pencil, X, ChevronLeft, ChevronRight, RefreshCw, Trash2, RotateCcw } from "lucide-react";
+import { ConfirmDialog } from "@/components/ui/custom/confirm-dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { RoundedSelect } from "@/components/ui/custom/rounded-select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { PdfThumbnail } from "@/components/contracts/document-pdf-preview";
+import type { LibraryKind } from "@/lib/document-pdf";
+import axiosClient from "@/lib/axios-interceptor";
+import { getApiErrorMessage } from "@/lib/api-error";
+import { toast } from "@/components/ui/sonner";
+type Item = { id: string; kind: LibraryKind; name: string; displayName: string | null; revision: number; updatedAtUtc: string; folderId: string | null; isStarred: boolean; metadataRevision: number; canDelete: boolean };
+type FolderItem = { id: string; name: string };
+const base = "/api/document-library";
+export function DocumentLibraryPanel({ activeId, refreshKey, disabled, onOpen, onUseTemplate, onOpenEditor, onClose, onDeleted }: {
+  activeId?: string; refreshKey: string; disabled: boolean; onOpen: (id: string) => void; onUseTemplate: (id: string) => void; onOpenEditor: (id: string) => void; onClose: () => void; onDeleted?: (kind: LibraryKind, id: string) => void;
+}) {
+  const [kind, setKind] = useState(""); const [query, setQuery] = useState(""); const [folderId, setFolderId] = useState(""); const [starred, setStarred] = useState(false);
+  const [page, setPage] = useState(1); const [reload, setReload] = useState(0);
+  const [data, setData] = useState<{ items: Item[]; totalPages: number; totalCount: number }>({ items: [], totalPages: 1, totalCount: 0 });
+  const [folders, setFolders] = useState<FolderItem[]>([]); const [loading, setLoading] = useState(false); const [mutating, setMutating] = useState(false); const [error, setError] = useState("");
+  const [editing, setEditing] = useState<Item | null>(null); const [name, setName] = useState(""); const [targetFolder, setTargetFolder] = useState("");
+  const [folderForm, setFolderForm] = useState<{ id?: string; name: string } | null>(null);
+  const [trash, setTrash] = useState(false);
+  const [removal, setRemoval] = useState<Item | null>(null);
+  useEffect(() => {
+    const abort = new AbortController(); const timer = setTimeout(async () => {
+      setLoading(true); setError("");
+      try {
+        const [items, list] = await Promise.all([axiosClient.get<unknown, typeof data>(base, { signal: abort.signal, params: { kind: kind || undefined, keyword: query, folderId: folderId || undefined, starred, page, trash } }), axiosClient.get<unknown, FolderItem[]>(`${base}/folders`, { signal: abort.signal })]);
+        if (!abort.signal.aborted) { setData(items); setFolders(list); }
+      } catch (e) { if (!abort.signal.aborted) setError(getApiErrorMessage(e, "Không tải được thư viện. Kiểm tra migration rồi thử lại.")); }
+      finally { if (!abort.signal.aborted) setLoading(false); }
+    }, 250); return () => { clearTimeout(timer); abort.abort(); };
+  }, [kind, query, folderId, starred, page, refreshKey, reload, trash]);
+  const removeOrRestore = async () => {
+    if (!removal) return;
+    setMutating(true); setError("");
+    try {
+      if (trash) await axiosClient.post(`${base}/${removal.kind}/${removal.id}/restore`, removal.revision);
+      else await axiosClient.delete(`${base}/${removal.kind}/${removal.id}`, { params: { expectedRevision: removal.revision } });
+      if (!trash) onDeleted?.(removal.kind, removal.id);
+      toast.success(trash ? "Đã khôi phục về thư viện." : "Đã chuyển vào thùng rác.");
+      setRemoval(null); setPage(1); setReload(n => n + 1);
+    } catch (e) { setError(getApiErrorMessage(e, "Không thực hiện được. Tài liệu có thể vừa thay đổi; làm mới thư viện rồi thử lại.")); }
+    finally { setMutating(false); }
+  };
+  const update = async (item: Item, patch: object) => {
+    setMutating(true); setError("");
+    try { await axiosClient.put(`${base}/${item.kind}/${item.id}/metadata`, { displayName: item.displayName, folderId: item.folderId, isStarred: item.isStarred, expectedRevision: item.metadataRevision, ...patch }); setEditing(null); setReload(n => n + 1); }
+    catch (e) { setError(getApiErrorMessage(e, "Không cập nhật được. Làm mới trước khi thử lại.")); }
+    finally { setMutating(false); }
+  };
+  const saveFolder = async () => {
+    if (!folderForm?.name.trim()) return; setMutating(true); setError("");
+    try { if (folderForm.id) await axiosClient.put(`${base}/folders/${folderForm.id}`, { name: folderForm.name }); else await axiosClient.post(base + "/folders", { name: folderForm.name }); setFolderForm(null); setReload(n => n + 1); }
+    catch (e) { setError(getApiErrorMessage(e, "Không lưu được thư mục.")); } finally { setMutating(false); }
+  };
+  const open = (item: Item) => item.kind === "imported" ? onOpen(item.id) : item.kind === "template" ? onUseTemplate(item.id) : onOpenEditor(item.id);
+  return <aside aria-label="Thư viện tài liệu" className="document-workspace-ui absolute inset-y-0 left-0 z-30 flex w-[min(320px,90vw)] shrink-0 flex-col border-r bg-card shadow-xl lg:static lg:w-[300px] lg:shadow-none xl:w-[320px]">
+    <div className="shrink-0 space-y-3 p-4 pb-0"><div className="flex items-center justify-between"><h2 className="text-sm font-semibold">Thư viện của bạn</h2><Button size="icon" variant="ghost" onClick={onClose} aria-label="Đóng thư viện"><X className="size-4" /></Button></div>
+      <div className="relative"><Search className="absolute left-3 top-3 size-4 text-muted-foreground" /><input aria-label="Tìm nội dung trong thư viện" value={query} maxLength={100} onChange={e => { setQuery(e.target.value); setPage(1); }} placeholder="Tìm kiếm nội dung của bạn" className="h-11 w-full rounded-xl border border-primary/20 bg-background pl-9 pr-3 text-xs" /></div>
+      <Button size="sm" variant={trash ? "default" : "outline"} className="w-full" onClick={() => { setTrash(v => !v); setPage(1); }}><Trash2 className="mr-2 size-4" />{trash ? "Quay về thư viện" : "Thùng rác"}</Button>
+      <div className="space-y-2"><p className="text-sm font-medium">Loại tài liệu</p><div role="group" aria-label="Phân loại tài liệu" className="flex flex-wrap gap-2">{([{ value: "", label: "Tất cả" }, { value: "imported", label: "Word cũ" }, { value: "editor", label: "Soạn thảo" }, { value: "template", label: "Mẫu" }]).map(tag => <Button key={tag.value} size="sm" variant={kind === tag.value ? "default" : "outline"} aria-pressed={kind === tag.value} className="rounded-full px-3" onClick={() => { setKind(tag.value); setPage(1); }}>{tag.label}</Button>)}</div></div>
+      <div className="flex gap-2"><RoundedSelect aria-label="Lọc thư mục" value={folderId} onValueChange={value => { setFolderId(value); setPage(1); }} className="flex-1" options={[{ value: "", label: "Tất cả thư mục" }, ...folders.map(f => ({ value: f.id, label: f.name }))]} /><Button size="icon" variant={starred ? "default" : "outline"} aria-label="Chỉ hiện đã gắn sao" aria-pressed={starred} onClick={() => { setStarred(v => !v); setPage(1); }}><Star className="size-4" /></Button></div>
+    </div>
+    <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">{error && <p role="alert" className="text-xs text-destructive">{error}</p>}{loading && <p role="status" className="text-xs">Đang tải thư viện...</p>}<><p className="text-xs font-medium">{data.totalCount} tài liệu</p>{!loading && !data.items.length && <p className="rounded-xl border border-dashed p-4 text-xs text-muted-foreground">Chưa có tài liệu phù hợp.</p>}
+      <div className="grid grid-cols-2 gap-x-3 gap-y-5">{data.items.map(item => <article key={`${item.kind}:${item.id}`} className="min-w-0"><button title={item.name} disabled={disabled || mutating || trash} onClick={() => open(item)} className="group w-full min-w-0 text-left disabled:opacity-50"><div className={`aspect-[1.1] overflow-hidden rounded-xl border bg-muted/40 p-2 ${activeId === item.id ? "border-primary" : "border-transparent group-hover:border-primary/40"}`}>{trash ? <div className="flex h-full items-center justify-center"><Trash2 className="size-10 text-muted-foreground" /></div> : <PdfThumbnail key={`${item.kind}:${item.id}:${item.revision}`} kind={item.kind} id={item.id} revision={item.revision} name={item.name} />}</div><p className="mt-2 truncate text-xs font-semibold">{item.name}</p><p className="mt-1 text-[10px] text-muted-foreground">{item.kind === "template" ? "Mẫu" : item.kind === "editor" ? "Soạn thảo" : "Word cũ"} · v{item.revision}</p><p className="text-[10px] text-muted-foreground">{new Date(item.updatedAtUtc.endsWith("Z") ? item.updatedAtUtc : `${item.updatedAtUtc}Z`).toLocaleDateString("vi-VN")}</p></button><div className="mt-1 flex justify-between">{!trash && <><Button size="icon" variant="ghost" className="size-7" disabled={mutating || disabled} aria-label={`Gắn sao ${item.name}`} aria-pressed={item.isStarred} onClick={() => void update(item, { isStarred: !item.isStarred })}><Star className={`size-3.5 ${item.isStarred ? "fill-amber-400 text-amber-500" : ""}`} /></Button><Button size="icon" variant="ghost" className="size-7" disabled={mutating || disabled} aria-label={`Đổi tên hoặc chuyển thư mục ${item.name}`} onClick={() => { setEditing(item); setName(item.name); setTargetFolder(item.folderId || ""); }}><Pencil className="size-3.5" /></Button></>}{item.canDelete && <Button size="icon" variant="ghost" className={`size-7 ${trash ? "" : "text-destructive"}`} disabled={disabled || mutating} aria-label={`${trash ? "Khôi phục" : "Xóa"} ${item.name}`} onClick={() => { setError(""); setRemoval(item); }}>{trash ? <RotateCcw className="size-3.5" /> : <Trash2 className="size-3.5" />}</Button>}</div></article>)}</div>
+      {data.totalPages > 1 && <div className="flex items-center justify-between text-xs"><Button size="icon" variant="ghost" aria-label="Trang thư viện trước" disabled={loading || page <= 1} onClick={() => setPage(p => p - 1)}><ChevronLeft className="size-4" /></Button>{page}/{data.totalPages}<Button size="icon" variant="ghost" aria-label="Trang thư viện sau" disabled={loading || page >= data.totalPages} onClick={() => setPage(p => p + 1)}><ChevronRight className="size-4" /></Button></div>}</>
+      <div className="border-t pt-4"><div className="mb-3 flex items-center justify-between"><h3 className="text-xs font-semibold">Thư mục của tôi</h3><Button size="icon" variant="ghost" aria-label="Tạo thư mục" disabled={mutating} onClick={() => setFolderForm({ name: "" })}><Plus className="size-4" /></Button></div>{folders.map(f => <div key={f.id} className="flex items-center"><button className="flex min-w-0 flex-1 items-center gap-2 rounded-lg p-2 text-left text-xs hover:bg-muted" onClick={() => { setFolderId(f.id); setPage(1); }}><Folder className="size-4 shrink-0 text-primary" /><span className="truncate">{f.name}</span></button><Button size="icon" variant="ghost" aria-label={`Đổi tên thư mục ${f.name}`} onClick={() => setFolderForm(f)}><Pencil className="size-3" /></Button></div>)}</div>
+      <Button size="sm" variant="ghost" className="w-full" disabled={loading || mutating} onClick={() => setReload(n => n + 1)}><RefreshCw className="mr-2 size-3.5" />Làm mới thư viện</Button>
+    </div>
+    <ConfirmDialog isOpen={!!removal} isLoading={mutating} onClose={() => setRemoval(null)} title={trash ? "Khôi phục tài liệu?" : removal?.kind === "template" ? "Xóa mẫu dùng chung?" : "Xóa tài liệu?"} description={<div className="space-y-2"><p>{trash ? `Khôi phục “${removal?.name}” về thư viện.` : `Chuyển “${removal?.name}” vào thùng rác. Bạn có thể khôi phục sau; file gốc và lịch sử không bị xóa vĩnh viễn. Các thay đổi chưa lưu trong tài liệu đang mở sẽ bị bỏ.`}</p>{!trash && removal?.kind === "template" && <p>Mẫu sẽ ngừng hiển thị cho cả công ty. Các tài liệu đã tạo từ mẫu không bị xóa.</p>}{error && <p role="alert" className="text-destructive">{error}</p>}</div>} confirmText={trash ? "Khôi phục" : "Chuyển vào thùng rác"} variant={trash ? "default" : "destructive"} onConfirm={() => void removeOrRestore()} />
+    <Dialog open={!!editing} onOpenChange={value => { if (!value && !mutating) setEditing(null); }}><DialogContent><DialogHeader><DialogTitle>Thông tin trong thư viện</DialogTitle><DialogDescription>Tên/thư mục là cá nhân, không đổi file gốc hoặc mẫu của công ty.</DialogDescription></DialogHeader><Input aria-label="Tên hiển thị tài liệu" maxLength={200} value={name} onChange={e => setName(e.target.value)} /><RoundedSelect aria-label="Thư mục của tài liệu" value={targetFolder} onValueChange={setTargetFolder} options={[{ value: "", label: "Không có thư mục" }, ...folders.map(f => ({ value: f.id, label: f.name }))]} />{error && <p role="alert" className="text-sm text-destructive">{error}</p>}<Button disabled={mutating || !name.trim()} onClick={() => editing && void update(editing, { displayName: name, folderId: targetFolder || null })}>Lưu thông tin</Button></DialogContent></Dialog>
+    <Dialog open={!!folderForm} onOpenChange={value => { if (!value && !mutating) setFolderForm(null); }}><DialogContent><DialogHeader><DialogTitle>{folderForm?.id ? "Đổi tên thư mục" : "Tạo thư mục"}</DialogTitle><DialogDescription>Thư mục riêng theo tài khoản và công ty hiện tại.</DialogDescription></DialogHeader><Input aria-label="Tên thư mục" maxLength={100} value={folderForm?.name || ""} onChange={e => setFolderForm(old => old ? { ...old, name: e.target.value } : old)} />{error && <p role="alert" className="text-sm text-destructive">{error}</p>}<Button disabled={mutating || !folderForm?.name.trim()} onClick={() => void saveFolder()}>Lưu thư mục</Button></DialogContent></Dialog>
+  </aside>;
+}

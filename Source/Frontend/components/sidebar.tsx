@@ -52,6 +52,8 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
+  { label: "Nhập hợp đồng Word cũ", icon: FileText, href: "/contract-import", requiredPermissions: [RBAC_PERMISSIONS.contractCreate] },
+  { label: "Soạn thảo hợp đồng", icon: FileSignature, href: "/contract-editor", requiredPermissions: [RBAC_PERMISSIONS.contractCreate] },
   // Dashboard is retained at /dashboard; restore its navigation entry when needed.
   {
     label: "Hợp đồng",

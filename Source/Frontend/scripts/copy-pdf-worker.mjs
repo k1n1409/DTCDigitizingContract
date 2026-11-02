@@ -1,0 +1,11 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const source = path.join(root, "node_modules/pdfjs-dist");
+const { version } = JSON.parse(await fs.readFile(path.join(source, "package.json"), "utf8"));
+const target = path.join(root, "public/pdfjs");
+await fs.mkdir(target, { recursive: true });
+await fs.copyFile(path.join(source, "build/pdf.worker.min.mjs"), path.join(target, `pdf.worker-${version}.min.mjs`));
+for (const folder of ["cmaps", "standard_fonts", "wasm"]) await fs.cp(path.join(source, folder), path.join(target, folder), { recursive: true });
+console.log(`Prepared local PDF.js ${version} assets.`);

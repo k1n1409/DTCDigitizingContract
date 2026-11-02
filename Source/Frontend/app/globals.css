@@ -310,3 +310,23 @@
     transition: none;
   }
 }
+
+/* Larger workspace chrome; document typography is deliberately left untouched. */
+.document-workspace-ui {
+  font-size: 15px;
+  line-height: 1.55;
+}
+.document-workspace-ui :is(.text-xs, .text-\[10px\], .text-\[11px\]):not([data-document-content] *, [data-editor-page] *) {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.document-workspace-ui .text-sm:not([data-document-content] *, [data-editor-page] *) {
+  font-size: 15px;
+  line-height: 1.55;
+}
+.document-workspace-ui :is(button, input, select, label):not([data-document-content] *, [data-editor-page] *) {
+  font-size: 15px;
+}
+.document-workspace-ui :is(h1, h2, h3):not([data-document-content] *, [data-editor-page] *) {
+  font-size: 16px;
+}

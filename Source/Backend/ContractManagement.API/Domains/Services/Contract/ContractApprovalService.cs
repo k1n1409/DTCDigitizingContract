@@ -253,7 +253,7 @@ public sealed class ContractApprovalService : IContractApprovalService
                 && x.EmployeeType == (byte)EmployeeType.AdminOfficer, cancellationToken);
         if (!isReviewer) throw new RbacOperationException(403,
             AuthorizationErrorCodes.PermissionDenied,
-            "Chỉ nhân viên quản trị được kiểm tra trung gian.");
+            "Chỉ quản lý cấp dưới/Hành chính được duyệt bước quản lý.");
         return await ResolveAsync(approvalRequestId, decision, request.RowVersion,
             comment, employeeId, false, cancellationToken, administrativeReview: true);
     }

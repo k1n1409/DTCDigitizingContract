@@ -21,13 +21,13 @@ export const getEmployeeTypeLabel = (type?: EmployeeType | number | null) => {
     case EmployeeType.Marketing:
       return "Marketing";
     case EmployeeType.AdminOfficer:
-      return "Hành chính";
+      return "Quản lý / Hành chính";
     case EmployeeType.Technical:
       return "Kỹ thuật";
     case EmployeeType.Accountant:
       return "Kế toán";
     case EmployeeType.Manager:
-      return "Quản lý";
+      return "Sếp";
     default:
       return "Chưa cập nhật";
   }

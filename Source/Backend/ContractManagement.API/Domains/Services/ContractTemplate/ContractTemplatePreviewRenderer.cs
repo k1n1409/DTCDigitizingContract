@@ -620,6 +620,12 @@ public sealed class ContractTemplatePreviewRenderer : IContractTemplatePreviewRe
                 : (value.FontSize.Value * 2).ToString(),
             italic: value.Italic,
             underline: value.Underline));
+        if (value.FontFamily is not null) {
+            var fonts = run.RunProperties!.GetFirstChild<W.RunFonts>();
+            if (fonts is null) run.RunProperties.PrependChild(new W.RunFonts { Ascii = value.FontFamily, HighAnsi = value.FontFamily });
+            else { fonts.Ascii = value.FontFamily; fonts.HighAnsi = value.FontFamily; }
+        }
+        if (value.Strike) run.RunProperties!.Append(new W.Strike());
         var parts = value.Text
             .Replace("\r\n", "\n", StringComparison.Ordinal)
             .Split('\n');
@@ -784,6 +790,7 @@ public sealed class ContractTemplatePreviewRenderer : IContractTemplatePreviewRe
             "center" => W.JustificationValues.Center,
             "right" => W.JustificationValues.Right,
             "left" => W.JustificationValues.Left,
+            "justify" => W.JustificationValues.Both,
             _ => null
         };
 

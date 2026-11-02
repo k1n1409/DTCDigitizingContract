@@ -7,7 +7,7 @@ namespace ContractManagement.API.Common.Security;
 /// </summary>
 public static class RbacPermissions
 {
-    public const string Version = "rbac-v3";
+    public const string Version = "rbac-v4";
 
     public const string EmployeeDirectoryRead = "employee.directory.read";
     public const string EmployeeManage = "employee.manage";
@@ -66,7 +66,9 @@ public static class EmployeePermissionCatalog
         {
             [EmployeeType.Sale] = Merge(RbacPermissions.CustomerManage),
             [EmployeeType.Marketing] = Merge(RbacPermissions.CustomerManage),
-            [EmployeeType.AdminOfficer] = Administration(RbacPermissions.ContractApprovalReview),
+            // AdminOfficer is the subordinate manager/administration role, not the boss.
+            [EmployeeType.AdminOfficer] = Administration(RbacPermissions.ContractApprovalReview).Where(permission =>
+                permission != RbacPermissions.ContractSigningManage).ToArray(),
             [EmployeeType.Technical] = Merge(RbacPermissions.ContractExecutionRead),
             [EmployeeType.Accountant] = Administration().Where(permission =>
                 permission != RbacPermissions.ContractSigningManage).ToArray(),

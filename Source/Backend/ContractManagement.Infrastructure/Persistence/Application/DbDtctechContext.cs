@@ -168,6 +168,41 @@ public partial class DbDtctechContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<DocumentLibraryFolder>(entity => {
+            entity.ToTable("tbl_DocumentLibraryFolder"); entity.HasKey(x => x.Id);
+            entity.Property(x => x.Name).HasMaxLength(100);
+            entity.HasIndex(x => new { x.TenantId, x.EmployeeId });
+        });
+        modelBuilder.Entity<DocumentLibraryEntry>(entity => {
+            entity.ToTable("tbl_DocumentLibraryEntry");
+            entity.HasKey(x => new { x.TenantId, x.EmployeeId, x.Kind, x.DocumentId });
+            entity.Property(x => x.Kind).HasMaxLength(16); entity.Property(x => x.DisplayName).HasMaxLength(200);
+            entity.Property(x => x.Revision).IsConcurrencyToken();
+            entity.HasOne<DocumentLibraryFolder>().WithMany().HasForeignKey(x => x.FolderId).OnDelete(DeleteBehavior.Restrict);
+        });
+        modelBuilder.Entity<ImportedContractDocument>(entity => {
+            entity.ToTable("tbl_ImportedContractDocument"); entity.HasKey(x => x.Id);
+            entity.Property(x => x.Name).HasMaxLength(200); entity.Property(x => x.Sha256).HasMaxLength(64);
+            entity.Property(x => x.Revision).IsConcurrencyToken();
+            entity.HasIndex(x => new { x.TenantId, x.EmployeeId, x.UpdatedAtUtc });
+        });
+        modelBuilder.Entity<ImportedContractRevision>(entity => {
+            entity.ToTable("tbl_ImportedContractRevision"); entity.HasKey(x => new { x.DocumentId, x.Revision });
+            entity.HasOne<ImportedContractDocument>().WithMany().HasForeignKey(x => x.DocumentId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<ContractEditorDocument>(entity => {
+            entity.ToTable("tbl_ContractEditorDocument");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Title).HasMaxLength(100);
+            entity.Property(x => x.Revision).IsConcurrencyToken();
+            entity.HasIndex(x => new { x.TenantId, x.EmployeeId, x.UpdatedAtUtc });
+        });
+        modelBuilder.Entity<ContractEditorRevision>(entity => {
+            entity.ToTable("tbl_ContractEditorRevision");
+            entity.HasKey(x => new { x.DocumentId, x.Revision });
+            entity.Property(x => x.Title).HasMaxLength(100);
+            entity.HasOne<ContractEditorDocument>().WithMany().HasForeignKey(x => x.DocumentId).OnDelete(DeleteBehavior.Cascade);
+        });
         modelBuilder.Entity<TblContractApprovalRequest>(entity =>
         {
             entity.HasKey(x => x.ApprovalRequestId);

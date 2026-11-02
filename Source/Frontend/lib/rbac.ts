@@ -1,4 +1,4 @@
-export const RBAC_PERMISSION_VERSION = "rbac-v3" as const;
+export const RBAC_PERMISSION_VERSION = "rbac-v4" as const;
 
 export const RBAC_PERMISSIONS = {
   employeeDirectoryRead: "employee.directory.read",

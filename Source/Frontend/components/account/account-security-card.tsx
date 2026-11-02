@@ -102,7 +102,7 @@ export function AccountSecurityCard({
             <li className="flex items-start gap-2">
               <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-emerald-500" />
               <span>
-                Sử dụng ít nhất 12 ký tự kết hợp chữ hoa, chữ thường và số.
+                Sử dụng ít nhất 8 ký tự kết hợp chữ hoa, chữ thường và số.
               </span>
             </li>
             <li className="flex items-start gap-2">

@@ -27,7 +27,7 @@ export function NewPasswordFields({
   const [showConfirm, setShowConfirm] = useState(false);
   const validation = getAccountPasswordRules(password);
   const rules = [
-    { label: "Từ 12 đến 100 ký tự", pass: validation.hasLength },
+    { label: "Từ 8 đến 100 ký tự", pass: validation.hasLength },
     { label: "Có ít nhất một chữ số (0–9)", pass: validation.hasNumber },
     {
       label: "Bao gồm chữ hoa (A–Z) và chữ thường (a–z)",
@@ -44,7 +44,7 @@ export function NewPasswordFields({
             type={showPassword ? "text" : "password"}
             autoComplete="new-password"
             required
-            minLength={12}
+            minLength={8}
             maxLength={100}
             value={password}
             onChange={(e) => onPassword(e.target.value)}

@@ -91,7 +91,7 @@ export function EmployeeFormModal({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const passwordRules = getAccountPasswordRules(employeePassword);
   const passwordChecklist = [
-    { label: "Độ dài từ 12 đến 100 ký tự", satisfied: passwordRules.hasLength },
+    { label: "Độ dài từ 8 đến 100 ký tự", satisfied: passwordRules.hasLength },
     {
       label: "Chứa ít nhất một chữ số (0–9)",
       satisfied: passwordRules.hasNumber,
@@ -347,7 +347,7 @@ export function EmployeeFormModal({
                       return next;
                     });
                   }}
-                  minLength={12}
+                  minLength={8}
                   maxLength={100}
                   aria-describedby="employee-password-rules"
                   aria-invalid={!!errors.employeePassword}

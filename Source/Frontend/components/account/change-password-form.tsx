@@ -203,7 +203,7 @@ export function ChangePasswordForm({
             <PasswordField
               label="Mật khẩu mới"
               value={newPassword}
-              placeholder="Nhập mật khẩu mới (tối thiểu 12 ký tự)"
+              placeholder="Nhập mật khẩu mới (tối thiểu 8 ký tự)"
               visible={showNew}
               onVisibleChange={() => setShowNew((value) => !value)}
               onChange={setNewPassword}
@@ -266,7 +266,7 @@ export function ChangePasswordForm({
             <div className="grid gap-2 sm:grid-cols-2 text-xs">
               <RuleItem
                 satisfied={rules.hasMinLength}
-                label="Độ dài từ 12 đến 100 ký tự"
+                label="Độ dài từ 8 đến 100 ký tự"
               />
               <RuleItem
                 satisfied={rules.hasUpperAndLower}
