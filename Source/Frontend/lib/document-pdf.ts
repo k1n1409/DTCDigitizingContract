@@ -22,7 +22,7 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 export async function documentPdf(kind: LibraryKind, id: string, revision: number, owner: string, signal: AbortSignal, purpose: "preview" | "thumbnail" = "preview", variant: "reviewed" | "original" = "reviewed") {
   signal.throwIfAborted();
   if (cacheOwner !== owner) { buffers.clear(); bytesUsed = 0; cacheOwner = owner; for (const task of pending.values()) task.controller.abort(); pending.clear(); }
-  const key = `${owner}:${kind}:${id}:${revision}:${variant}`;
+  const key = `letterhead-v1:${owner}:${kind}:${id}:${revision}:${variant}`;
   const cached = buffers.get(key); if (cached) return cached.slice(0);
   let task = pending.get(key);
   if (!task) {

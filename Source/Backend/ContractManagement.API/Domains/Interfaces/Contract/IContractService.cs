@@ -11,6 +11,7 @@ namespace ContractManagement.Domains.Interfaces.Contract
     /// </summary>
     public interface IContractService
     {
+        Task<ContractFilterOptionsResponse> GetFilterOptionsAsync(int employeeId, bool canReadTenant = false, bool canReadExecution = false);
         /// <summary>
         /// Lấy danh sách hợp đồng mà nhân viên đang phụ trách.
         /// </summary>

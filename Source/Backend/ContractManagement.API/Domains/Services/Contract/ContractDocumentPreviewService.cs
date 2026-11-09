@@ -20,7 +20,8 @@ namespace ContractManagement.Domains.Services.Contract;
 /// </summary>
 public sealed class ContractDocumentPreviewService :
     IContractDocumentPreviewService,
-    IContractSubmissionArtifactRenderer
+    IContractSubmissionArtifactRenderer,
+    IContractEditorBindingFingerprint
 {
     private const string TemplateVersionObjectType = "ContractTemplateVersion";
     private const string DocxContentType =
@@ -110,11 +111,17 @@ public sealed class ContractDocumentPreviewService :
             $"{rendered.SafeContractCode}-submitted.pdf");
     }
 
+    public async Task<string> CaptureEditorBindingHashAsync(int contractId, int employeeId, CancellationToken ct = default)
+    {
+        var rendered = await RenderDocxAsync(contractId, employeeId, false, ct, snapshotOnly: true);
+        return ContractEditorBindingPolicy.BusinessFingerprint(rendered.Snapshot, employeeId);
+    }
+
     private async Task<RenderedContractDocx> RenderDocxAsync(
         int contractId,
         int employeeId,
         bool requireNegotiating,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool snapshotOnly = false)
     {
         // Preview is a write-scope operation: Manager may read another owner's
         // contract but may not render/export its mutable legal content.
@@ -148,8 +155,10 @@ public sealed class ContractDocumentPreviewService :
                 "Phiên bản hiện hành của hợp đồng không còn khả dụng.");
 
         var templateVersionId = version.TemplateVersionId;
+        if (version.DocumentMode > 1) throw new InvalidOperationException("Chế độ tài liệu hợp đồng không hợp lệ. Không tự chuyển sang mẫu khác.");
+        var wordOnly = templateVersionId == 0 && version.DocumentMode == 1;
 
-        var template = await (
+        var template = wordOnly ? null : await (
                 from templateVersion in _dbContext.TblContractTemplateVersions
                     .AsNoTracking()
                 join templateDefinition in _dbContext.TblContractTemplates
@@ -157,11 +166,13 @@ public sealed class ContractDocumentPreviewService :
                     on templateVersion.TemplateId equals templateDefinition.TemplateId
                 where templateVersion.TemplateVersionId == templateVersionId
                 select new { Version = templateVersion, Template = templateDefinition })
-            .SingleOrDefaultAsync(cancellationToken)
-            ?? throw new InvalidOperationException(
-                "Phiên bản template của hợp đồng không còn khả dụng.");
+            .SingleOrDefaultAsync(cancellationToken);
 
-        EnsureTemplatePolicy(template.Version, template.Template, contract);
+        if (!wordOnly)
+        {
+            if (template is null) throw new InvalidOperationException("Phiên bản template của hợp đồng không còn khả dụng.");
+            EnsureTemplatePolicy(template.Version, template.Template, contract);
+        }
 
         var customer = await _dbContext.TblCustomers
             .AsNoTracking()
@@ -233,6 +244,8 @@ public sealed class ContractDocumentPreviewService :
                 item.LegalBasisId, item.BasisCode, item.ContentVi,
                 item.ContentEn, item.DisplayOrder)).ToArray()
         };
+        if (wordOnly)
+            return await RenderPinnedAsync(snapshot);
         var itemLayoutRows = await _dbContext
             .TblContractTemplateItemTableColumnLayouts
             .AsNoTracking()
@@ -270,8 +283,21 @@ public sealed class ContractDocumentPreviewService :
         };
         // Included in the canonical relational aggregate/hash alongside the artifact.
         snapshot = snapshot with { PlaceholderValues = scalars };
+        if (snapshotOnly || version.DocumentMode == 1)
+            return await RenderPinnedAsync(snapshot);
+
+        async Task<RenderedContractDocx> RenderPinnedAsync(SoftwareSupplyContractSnapshot currentSnapshot)
+        {
+            byte[] bytes = [];
+            if (!snapshotOnly)
+            {
+                var pinned = await _dbContext.Set<ContractVersionEditorDocument>().AsNoTracking().SingleOrDefaultAsync(x => x.VersionId == versionId && x.ContractId == contractId, cancellationToken);
+                bytes = ContractEditorBindingPolicy.RequireDocument(version, pinned, ContractEditorBindingPolicy.BusinessFingerprint(currentSnapshot, contract.EmployeeId));
+            }
+            return new RenderedContractDocx(bytes, SafeFileName(currentSnapshot.Contract.ContractCode, contractId), currentSnapshot, templateVersionId);
+        }
         var source = await ReadTemplateSourceAsync(
-            template.Version,
+            template!.Version,
             cancellationToken);
         var renderedDocx = _documentRenderer.Render(
             source,

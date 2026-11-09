@@ -3,6 +3,9 @@
 public partial class TblContract
 {
     public int ContractId { get; set; }
+    public Guid? EditorSourceDocumentId { get; set; }
+    public int? EditorSourceRevision { get; set; }
+    public string? EditorSourceTitle { get; set; }
 
     /// <summary>
     /// Khách hàng ký hợp đồng.
@@ -70,6 +73,10 @@ public partial class TblContract
     /// Mapping với ContractStatus.
     /// </summary>
     public byte Status { get; set; }
+    public byte Outcome { get; set; }
+    public string? OutcomeReason { get; set; }
+    public int? OutcomeUpdatedByEmployeeId { get; set; }
+    public DateTime? OutcomeUpdatedAtUtc { get; set; }
 
     /// <summary>
     /// Không sử dụng double/float cho dữ liệu tiền.

@@ -8,6 +8,33 @@ function load(file, require = () => { throw new Error("Unexpected import"); }) {
   const isolated = { exports: {} }; new Function("require", "exports", "module", js)(require, isolated.exports, isolated); return isolated.exports;
 }
 const rich = load("../lib/contract-rich-text.ts");
+test("text-only Word paragraphs keep their source link and reject structural text edits", () => {
+  const preservation = { sourceId: "11111111-1111-4111-8111-111111111111", sha256: "A".repeat(64) };
+  const block = { type: "paragraph", textOnly: true, sourceKey: "b2", runs: [{ text: "Độc Lập - Tự Do - Hạnh Phúc" }] };
+  const result = rich.parseContractRichText(rich.serializeContractRichText({ preservation, blocks: [block] }));
+  assert.equal(result.blocks[0].textOnly, true); assert.equal(result.blocks[0].sourceKey, "b2");
+  assert.throws(() => rich.serializeContractRichText({ blocks: [block] }));
+  assert.throws(() => rich.serializeContractRichText({ preservation, blocks: [{ ...block, locked: true }] }));
+  assert.throws(() => rich.serializeContractRichText({ preservation, blocks: [{ ...block, runs: [{ text: "Không\tđổi Tab" }] }] }));
+});
+const preflight = load("../lib/document-preflight.ts", name => { assert.equal(name, "./contract-rich-text"); return rich; });
+
+test("page layout survives serialization and rejects unsafe geometry", () => {
+  const layout = { ...rich.DEFAULT_DOCUMENT_LAYOUT, paper: "A5", orientation: "landscape", marginLeft: 25, lineSpacing: 1.5, spaceAfter: 12 };
+  const content = rich.serializeContractRichText({ layout, blocks: [{ type: "paragraph", runs: [{ text: "Nội dung" }], pageBreakBefore: true }] });
+  assert.deepEqual(rich.parseContractRichText(content).layout, layout);
+  assert.deepEqual(rich.documentPageSize(layout), { width: 210, height: 148 });
+  assert.ok(rich.serializeContractRichText({ layout, blocks: [] }));
+  for (const invalid of [{ marginLeft: 100 }, { lineSpacing: 0 }, { spaceAfter: -1 }, { paper: "A0" }]) assert.throws(() => rich.serializeContractRichText({ layout: { ...layout, ...invalid }, blocks: [] }));
+});
+
+test("preflight blocks empty linked fields and locates literal personal data", () => {
+  const content = rich.serializeContractRichText({ blocks: [{ type: "paragraph", runs: [{ text: "{{CUSTOMER_NAME}}" }] }, { type: "paragraph", runs: [{ text: "Email: old@example.com" }] }] });
+  const checks = preflight.checkEditorDocument(content, {});
+  assert.equal(checks.find(x => x.blocking).fieldKey, "CUSTOMER_NAME");
+  assert.equal(checks.find(x => x.id === "private-1").blockIndex, 1);
+  assert.ok(!preflight.checkEditorDocument(content, { CUSTOMER_NAME: "Khách mới" }).some(x => x.blocking));
+});
 test("Word preservation metadata and protected image/table blocks survive normalization and serialization", () => {
   const preservation = { sourceId: "11111111-1111-4111-8111-111111111111", sha256: "A".repeat(64), fieldKeys: ["CONTRACT_CODE"] };
   const doc = { preservation, blocks: [

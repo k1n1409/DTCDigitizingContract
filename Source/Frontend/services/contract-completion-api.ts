@@ -1,6 +1,6 @@
 import type { ContractDirection } from "@/services/contract-api";
 import axiosClient from "@/lib/axios-interceptor";
-import { ContractStatus } from "@/services/contract-api";
+import { ContractStatus, ContractOutcome } from "@/services/contract-api";
 
 const BASE_URL = "/api/contracts";
 
@@ -23,6 +23,8 @@ const multipart = (values: Record<string, string | number | File | undefined>) =
 };
 
 export const contractCompletionApi = {
+  getOutcome: (id: number) => axiosClient.get<unknown, ContractOutcomeResponse>(`${BASE_URL}/${id}/outcome`),
+  updateOutcome: (id: number, values: { currentVersionId: number; contractRowVersion: string; versionRowVersion: string; outcome: ContractOutcome; reason: string }) => axiosClient.post<unknown, ContractOutcomeResponse>(`${BASE_URL}/${id}/outcome`, values),
   get: (contractId: number) => axiosClient.get<unknown, ContractCompletionDetailResponse>(`${BASE_URL}/${contractId}/completion`),
   getReadiness: (contractId: number) => axiosClient.get<unknown, ContractCompletionReadinessResponse>(`${BASE_URL}/${contractId}/completion-readiness`),
   getPaymentMilestones: (contractId: number, versionId: number) => axiosClient.get<unknown, ContractPaymentMilestoneResponse[]>(`${BASE_URL}/${contractId}/versions/${versionId}/payment-milestones`),
@@ -39,3 +41,11 @@ export const contractCompletionApi = {
   complete: (contractId: number, values: { currentVersionId: number; contractRowVersion: string; versionRowVersion: string }) =>
     axiosClient.post<unknown, ContractCompletionDetailResponse>(`${BASE_URL}/${contractId}/complete`, values),
 };
+
+export interface ContractOutcomeResponse {
+  contractId: number; contractCode: string | null; contractName: string; legalStatus: ContractStatus;
+  outcome: ContractOutcome; reason: string | null; updatedAtUtc: string | null;
+  updatedByEmployeeId: number | null; updatedByEmployeeName: string | null;
+  currentVersionId: number; contractRowVersion: string; versionRowVersion: string;
+  options: { value: ContractOutcome; label: string; allowed: boolean; blocker: string | null }[];
+}

@@ -767,6 +767,8 @@ public sealed class ContractAuditQueryService : IContractAuditQueryService
         ContractAuditActionTypes.PaymentMilestoneAnchored,
         ContractAuditActionTypes.PaymentMilestoneStatusChanged,
         ContractAuditActionTypes.ContractCompleted,
+        ContractAuditActionTypes.ContractOutcomeUpdated,
+        ContractAuditActionTypes.ContractTextCorrected,
         ContractAuditActionTypes.ContractAttachmentUploaded,
         ContractAuditActionTypes.ContractAttachmentDeleted,
         ContractAuditActionTypes.NegotiationStarted,

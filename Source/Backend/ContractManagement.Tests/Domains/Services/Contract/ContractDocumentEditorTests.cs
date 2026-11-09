@@ -123,6 +123,64 @@ public sealed class ContractDocumentEditorTests
         Assert.False(ContractTermRichText.TryParse(content.Replace("Arial", "UntrustedFont"), out _));
     }
 
+    [Fact]
+    public async Task PageLayout_ExportsA5LandscapeMarginsSpacingAndExplicitBreak()
+    {
+        var controller = new ContractDocumentEditorController(new UnavailablePdf());
+        var model = new ContractTermRichTextDocument { Layout = new() { Paper = "A5", Orientation = "landscape", MarginLeft = 25, MarginRight = 15, MarginTop = 20, MarginBottom = 12, LineSpacing = 1.5, SpaceBefore = 3, SpaceAfter = 12 }, Blocks = [new() { Type = "paragraph", Runs = [new() { Text = "Dữ liệu tiếng Việt" }], PageBreakBefore = true }] };
+        var content = ContractTermRichText.Prefix + JsonSerializer.Serialize(model, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        var file = Assert.IsType<FileContentResult>(await controller.Export("docx", new() { Content = content }, default));
+        using var stream = new MemoryStream(file.FileContents);
+        using var word = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(stream, false);
+        var body = word.MainDocumentPart!.Document.Body!;
+        var section = body.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.SectionProperties>()!;
+        var size = section.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.PageSize>()!;
+        Assert.Equal(11906U, size.Width!.Value); Assert.Equal(8391U, size.Height!.Value);
+        Assert.Equal(1417U, section.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.PageMargin>()!.Left!.Value);
+        var p = body.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.Paragraph>()!;
+        Assert.NotNull(p.ParagraphProperties!.PageBreakBefore);
+        Assert.Equal("360", p.ParagraphProperties.SpacingBetweenLines!.Line!.Value);
+        Assert.Equal("240", p.ParagraphProperties.SpacingBetweenLines.After!.Value);
+        model.Layout.MarginLeft = 100;
+        Assert.False(ContractTermRichText.TryParse(ContractTermRichText.Prefix + JsonSerializer.Serialize(model), out _));
+    }
+
+    [Fact]
+    public async Task NewDocument_HasCompanyLogoContactAndPageNumber_OnEveryPage()
+    {
+        var model = new ContractTermRichTextDocument { Blocks = [new() { Type = "paragraph", Runs = [new() { Text = "HỢP ĐỒNG KIỂM THỬ ĐẦU TRANG", Bold = true, FontSize = 14 }], Alignment = "center" }, new() { Type = "paragraph", Runs = [new() { Text = "Nội dung trang thứ nhất. Logo, tên công ty và thông tin liên hệ dùng chung với bản xuất." }] }, new() { Type = "paragraph", PageBreakBefore = true, Runs = [new() { Text = "Nội dung trang thứ hai." }] }] };
+        var api = new ContractDocumentEditorController(new UnavailablePdf());
+        var content = ContractTermRichText.Prefix + JsonSerializer.Serialize(model);
+        var file = Assert.IsType<FileContentResult>(await api.Export("docx", new() { Content = content }, default));
+        using (var stream = new MemoryStream(file.FileContents))
+        using (var word = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(stream, false))
+        {
+            var main = word.MainDocumentPart!; var header = Assert.Single(main.HeaderParts);
+            Assert.Contains("CÔNG TY TNHH", header.Header!.InnerText); Assert.Contains("www.dtctech.vn", header.Header.InnerText); Assert.Contains("info@dtctech.vn", header.Header.InnerText);
+            Assert.Single(header.ImageParts);
+            var section = main.Document.Body!.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.SectionProperties>()!;
+            Assert.Single(section.Elements<DocumentFormat.OpenXml.Wordprocessing.HeaderReference>());
+            Assert.Single(section.Elements<DocumentFormat.OpenXml.Wordprocessing.FooterReference>());
+            Assert.Contains(Assert.Single(main.FooterParts).Footer!.Descendants<DocumentFormat.OpenXml.Wordprocessing.SimpleField>(), f => f.Instruction!.Value!.Contains("PAGE"));
+            Assert.Null(main.Document.Body!.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.SectionProperties>()!.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.TitlePage>());
+        }
+        var converter = Environment.GetEnvironmentVariable("IMPORTED_CONTRACT_LIBREOFFICE_PATH");
+        var target = Environment.GetEnvironmentVariable("EDITOR_STATIONERY_PDF_FIXTURE_PATH");
+        if (System.IO.File.Exists(converter) && !string.IsNullOrEmpty(target))
+        {
+            await System.IO.File.WriteAllBytesAsync(System.IO.Path.ChangeExtension(target, ".docx"), file.FileContents);
+            var pdf = new ContractManagement.Domains.Services.ContractTemplate.LibreOfficeContractTemplatePdfRenderer(Microsoft.Extensions.Options.Options.Create(new ContractManagement.Domains.Services.ContractTemplate.TemplatePdfRenderingOptions { ExecutablePath = converter }));
+            await System.IO.File.WriteAllBytesAsync(target, await pdf.ConvertPreviewToPdfAsync(file.FileContents));
+        }
+    }
+
+    [Fact]
+    public async Task CompanyHeader_RejectsMarginsThatWouldOverlapBody()
+    {
+        var content = ContractTermRichText.Prefix + JsonSerializer.Serialize(new ContractTermRichTextDocument { Layout = new() { MarginTop = 5 }, Blocks = [new() { Type = "paragraph", Runs = [new() { Text = "Test" }] }] });
+        Assert.IsType<BadRequestObjectResult>(await new ContractDocumentEditorController(new UnavailablePdf()).Export("docx", new() { Content = content }, default));
+    }
+
     private sealed class UnavailablePdf : IContractTemplatePdfRenderer
     {
         public Task<byte[]> ConvertPreviewToPdfAsync(byte[] docx, CancellationToken ct = default) =>

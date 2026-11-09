@@ -41,6 +41,7 @@ export type ContractRichTextBlock =
       type: "paragraph";
       sourceKey?: string;
       locked?: boolean;
+      textOnly?: boolean;
       label?: string;
       previewImage?: string;
       runs: ContractRichTextRun[];
@@ -56,7 +57,25 @@ export type ContractRichTextBlock =
 
 export interface ContractRichTextDocument {
   blocks: ContractRichTextBlock[];
+  layout?: ContractDocumentLayout;
   preservation?: { sourceId: string; sha256: string; fieldKeys?: string[] };
+}
+
+export interface ContractDocumentLayout {
+  paper: "A4" | "A5";
+  orientation: "portrait" | "landscape";
+  marginTop: number;
+  marginBottom: number;
+  marginLeft: number;
+  marginRight: number;
+  lineSpacing: number;
+  spaceBefore: number;
+  spaceAfter: number;
+}
+export const DEFAULT_DOCUMENT_LAYOUT: ContractDocumentLayout = { paper: "A4", orientation: "portrait", marginTop: 20, marginBottom: 20, marginLeft: 20, marginRight: 20, lineSpacing: 1.15, spaceBefore: 0, spaceAfter: 6 };
+export function documentPageSize(layout: ContractDocumentLayout) {
+  const [short, long] = layout.paper === "A5" ? [148, 210] : [210, 297];
+  return layout.orientation === "landscape" ? { width: long, height: short } : { width: short, height: long };
 }
 
 const sourceKey = (value: unknown) => typeof value === "string" && /^[bp][0-9]{1,5}$/.test(value) ? value : undefined;
@@ -280,6 +299,7 @@ export const normalizeContractRichTextDocument = (
         type: "paragraph",
         ...(blockSourceKey(block.sourceKey) ? { sourceKey: blockSourceKey(block.sourceKey) } : {}),
         ...(block.locked === true ? { locked: true, label: typeof block.label === "string" ? block.label.slice(0, 128) : "Khối Word gốc", ...(typeof block.previewImage === "string" && block.previewImage.length <= 250000 && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(block.previewImage) ? { previewImage: block.previewImage } : {}) } : {}),
+        ...(block.textOnly === true ? { textOnly: true } : {}),
         runs: normalizeRuns(block.runs),
         ...(block.pageBreakBefore === true ? { pageBreakBefore: true } : {}),
         ...(alignment ? { alignment } : {}),
@@ -355,10 +375,17 @@ export const normalizeContractRichTextDocument = (
   });
 
   if (invalid) return null;
+  const layout = (value as ContractRichTextDocument).layout;
+  if (layout) {
+    if (!["A4", "A5"].includes(layout.paper) || !["portrait", "landscape"].includes(layout.orientation)) return null;
+    for (const key of ["marginTop", "marginBottom", "marginLeft", "marginRight"] as const) if (!Number.isFinite(layout[key]) || layout[key] < 5 || layout[key] > 50) return null;
+    if (!Number.isFinite(layout.lineSpacing) || layout.lineSpacing < 1 || layout.lineSpacing > 3 || !Number.isFinite(layout.spaceBefore) || layout.spaceBefore < 0 || layout.spaceBefore > 72 || !Number.isFinite(layout.spaceAfter) || layout.spaceAfter < 0 || layout.spaceAfter > 72) return null;
+  }
   const preservation = (value as ContractRichTextDocument).preservation;
   if (preservation && (!/^[0-9a-f-]{36}$/i.test(preservation.sourceId) || !/^[0-9a-f]{64}$/i.test(preservation.sha256))) return null;
   if (normalizedBlocks.some(block => block.type === "paragraph" && block.locked && (!preservation || !block.sourceKey))) return null;
-  return { blocks: normalizedBlocks, ...(preservation ? { preservation: { sourceId: preservation.sourceId, sha256: preservation.sha256, fieldKeys: (preservation.fieldKeys || []).filter(key => /^[A-Z][A-Z0-9_]{0,79}$/.test(key)).slice(0, 200) } } : {}) };
+  if (normalizedBlocks.some(block => block.type === "paragraph" && block.textOnly && (!preservation || !block.sourceKey || block.locked || block.runs.some(r => /[\r\n\t]/.test(r.text))))) return null;
+  return { blocks: normalizedBlocks, ...(layout ? { layout: { ...layout } } : {}), ...(preservation ? { preservation: { sourceId: preservation.sourceId, sha256: preservation.sha256, fieldKeys: (preservation.fieldKeys || []).filter(key => /^[A-Z][A-Z0-9_]{0,79}$/.test(key)).slice(0, 200) } } : {}) };
 };
 
 const emptyDocument = (): ContractRichTextDocument => ({ blocks: [] });
@@ -398,7 +425,7 @@ export const serializeContractRichText = (
 ) => {
   const normalized = normalizeContractRichTextDocument(document);
   if (!normalized) throw new Error("Rich text v4 không hợp lệ.");
-  if (!hasMeaningfulContent(normalized) && !normalized.preservation) return "";
+  if (!hasMeaningfulContent(normalized) && !normalized.preservation && !normalized.layout) return "";
   return `${CONTRACT_RICH_TEXT_PREFIX}${JSON.stringify(normalized)}`;
 };
 

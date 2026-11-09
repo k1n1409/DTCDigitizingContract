@@ -5,6 +5,8 @@ namespace ContractManagement.Domains.Interfaces.Contract;
 
 public interface IContractCompletionService
 {
+    Task<ContractOutcomeResponse> GetOutcomeAsync(int contractId, int employeeId, CancellationToken ct = default);
+    Task<ContractOutcomeResponse> UpdateOutcomeAsync(int contractId, UpdateContractOutcomeRequest request, int employeeId, CancellationToken ct = default);
     Task<ContractCompletionDetailResponse> GetAsync(
         int contractId, int employeeId, CancellationToken cancellationToken = default);
     Task<ContractCompletionReadinessResponse> GetReadinessAsync(

@@ -24,6 +24,27 @@ public sealed class ContractEditorSourceAsset
     public DateTime CreatedAtUtc { get; set; }
 }
 
+// Kept outside tbl_Contract so list/detail queries never load the DOCX binary.
+public sealed class ContractEditorSourceSnapshot
+{
+    public int ContractId { get; set; }
+    public byte[] Docx { get; set; } = [];
+}
+
+public sealed class ContractVersionEditorDocument
+{
+    public int VersionId { get; set; }
+    public int ContractId { get; set; }
+    public Guid EditorDocumentId { get; set; }
+    public int EditorRevision { get; set; }
+    public string Title { get; set; } = "";
+    public string DocxHash { get; set; } = "";
+    public string BusinessHash { get; set; } = "";
+    public byte[] Docx { get; set; } = [];
+    public int BoundByEmployeeId { get; set; }
+    public DateTime BoundAtUtc { get; set; }
+}
+
 public sealed class ContractEditorRevision
 {
     public Guid DocumentId { get; set; }

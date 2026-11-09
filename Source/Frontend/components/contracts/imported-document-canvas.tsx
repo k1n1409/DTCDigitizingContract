@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, Maximize, Minus, Plus, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { ChevronLeft, ChevronRight, Maximize, Minus, Plus, PanelRightClose, PanelRightOpen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { reviewedBlockText, type ReviewField } from "@/lib/imported-contract-editing";
 
-type Block = { id: string; text: string; context: string; editable: boolean };
+type Block = { id: string; text: string; context: string; editable: boolean; editMode?: string; editReason?: string };
 const WIDTH = 794, HEIGHT = 1123, MARGIN = 76, BODY = HEIGHT - MARGIN * 2;
 
 function PaperText({ blockId, value, label, disabled, onChange, onFocus }: {
@@ -23,9 +23,10 @@ function PaperText({ blockId, value, label, disabled, onChange, onFocus }: {
     onChange={e => onChange(e.target.value.replace(/[\r\n\t]+/g, " "))} />;
 }
 
-export function ImportedDocumentCanvas({ blocks, fields, original, readOnly, busy, onChange, renderOriginal, onSelect, onFocusBlock, panelOpen, onTogglePanel }: {
+export function ImportedDocumentCanvas({ blocks, fields, original, readOnly, busy, onChange, onDelete, renderOriginal, onSelect, onFocusBlock, panelOpen, onTogglePanel }: {
   blocks: Block[]; fields: ReviewField[]; original: boolean; readOnly: boolean; busy: boolean;
   onChange: (block: Block, value: string) => void; renderOriginal: (block: Block) => ReactNode;
+  onDelete?: (block: Block) => void;
   onSelect: (block: Block, node: HTMLElement) => void; onFocusBlock: (id: string) => void;
   panelOpen: boolean; onTogglePanel: () => void;
 }) {
@@ -90,12 +91,12 @@ export function ImportedDocumentCanvas({ blocks, fields, original, readOnly, bus
   return <section className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-[#f1f2f7]">
     <div className="flex shrink-0 justify-center border-b border-slate-200 bg-[#f1f2f7] px-3 py-2">
       <div className="flex max-w-full items-center gap-3 rounded-xl border bg-white px-4 py-2 text-xs text-slate-600 shadow-sm">
-        <span className="font-medium text-slate-900">{original ? "Đối chiếu bản gốc" : readOnly ? "Bản lịch sử · Chỉ đọc" : "Văn bản · Gõ trực tiếp"}</span><span className="hidden border-l pl-3 sm:inline">Times New Roman · 12 pt</span><span className="hidden text-slate-400 xl:inline">Định dạng hiển thị</span>
+        <span className="font-medium text-slate-900">{original ? "Đối chiếu bản gốc · Chỉ xem" : readOnly ? "Bản lịch sử · Chỉ xem" : "Chỉ sửa chữ · Giữ định dạng Word gốc"}</span><span className="hidden border-l pl-3 sm:inline">Vùng bị giới hạn có lý do ngay bên dưới</span>
       </div>
     </div>
     <div ref={viewport} className="relative min-h-0 flex-1 overflow-auto overscroll-contain p-4 sm:p-8" aria-label="Vùng trang tài liệu">
       <div aria-hidden className="pointer-events-none absolute left-0 top-0 invisible" ref={measure} style={{ width: WIDTH - 2 * MARGIN, ...paperStyle }}>
-        {visible.map(b => <div key={b.id} data-measure-block={b.id} className="min-h-7 whitespace-pre-wrap break-words py-1">{text(b) || "\u00a0"}</div>)}
+        {visible.map(b => <div key={b.id} data-measure-block={b.id} className="min-h-7 whitespace-pre-wrap break-words py-1">{text(b) || "\u00a0"}{!b.editable && <div className="mt-1 rounded border border-amber-200 bg-amber-50 px-2 text-[11px] leading-4 [font-family:Arial,sans-serif]">Chỉ xem · {b.editReason || "Vùng Word phức tạp được giữ nguyên khi xuất."}</div>}</div>)}
       </div>
       <div className="mx-auto flex w-max min-w-0 flex-col gap-8">
         {renderedGroups.map(({ ids, height }, index) => <div key={index} data-editor-page={index + 1} className="relative shrink-0 scroll-mt-4" style={{ width: WIDTH * zoom / 100, height: height * zoom / 100 }}>
@@ -106,8 +107,9 @@ export function ImportedDocumentCanvas({ blocks, fields, original, readOnly, bus
               return <div key={id} id={`source-${id}`} title={canEdit ? undefined : `${block.context}${block.editable ? "" : " · Vùng chỉ xem"}`}
                 className={`relative mb-2 min-h-7 whitespace-pre-wrap break-words rounded-sm py-1 ${text(block) !== block.text ? "bg-amber-50/60 ring-1 ring-amber-300" : ""} ${!block.editable ? "bg-slate-50/60 ring-1 ring-slate-200" : ""} ${canEdit ? "hover:bg-sky-50/60 focus-within:bg-sky-50/40 focus-within:ring-1 focus-within:ring-sky-200" : ""}`}
                 data-block={id}>
-                {canEdit ? <PaperText blockId={id} label={`Nội dung ${block.context} ${id}`} value={text(block)} disabled={busy} onFocus={() => onFocusBlock(id)} onChange={value => onChange(block, value)} />
+                {canEdit ? <><PaperText blockId={id} label={`Nội dung ${block.context} ${id}`} value={text(block)} disabled={busy} onFocus={() => onFocusBlock(id)} onChange={value => onChange(block, value)} />{onDelete && <Button type="button" size="icon" variant="ghost" className="absolute -right-9 top-1 size-7 rounded-md text-destructive hover:bg-destructive/10 hover:text-destructive" aria-label={`Xóa nội dung ${block.context} ${id}`} title="Xóa nội dung đoạn/ô" disabled={busy || !text(block)} onClick={() => onDelete(block)}><Trash2 className="size-3.5" /></Button>}</>
                   : <div tabIndex={0} onMouseUp={e => original && onSelect(block, e.currentTarget)} onKeyUp={e => original && onSelect(block, e.currentTarget)}>{original ? renderOriginal(block) : text(block) || <span className="text-slate-300">[Đã xóa nội dung]</span>}</div>}
+                {!block.editable && <p className="mt-1 rounded border border-amber-200 bg-amber-50 px-2 text-[11px] leading-4 text-amber-950 [font-family:Arial,sans-serif]">Chỉ xem · {block.editReason || "Vùng Word phức tạp được giữ nguyên khi xuất."}</p>}
               </div>;
             })}
             <span className="absolute bottom-5 right-8 select-none text-[11px] text-slate-400">{index + 1}</span>

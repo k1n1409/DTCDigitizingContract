@@ -9,6 +9,8 @@ namespace ContractManagement.API.Domains.DTOs.Requests.Contract
     {
         [EnumDataType(typeof(ContractManagement.API.Common.Enums.ContractDirection))]
         public ContractManagement.API.Common.Enums.ContractDirection? ContractDirection { get; set; }
+        [EnumDataType(typeof(ContractManagement.API.Common.Enums.ContractLanguageMode))]
+        public ContractManagement.API.Common.Enums.ContractLanguageMode? LanguageMode { get; set; }
         /// <summary>
         /// RowVersion của Contract lấy từ API Get Detail.
         /// </summary>

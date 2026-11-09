@@ -28,6 +28,10 @@ import {
 } from "@/components/ui/card";
 import { useAuthStore } from "@/hooks/use-auth-store";
 
+function employeeLandingPage(mustChangePassword: boolean) {
+  return mustChangePassword ? "/change-password?required=1" : "/dashboard";
+}
+
 export default function LoginPage() {
   const recoveryLogin = useRef(false);
   const router = useRouter();
@@ -92,22 +96,14 @@ export default function LoginPage() {
         return;
       }
       if (isAuthenticated && user) {
-        router.push(
-          user.mustChangePassword
-            ? "/change-password?required=1"
-            : "/contracts",
-        );
+        router.replace(employeeLandingPage(user.mustChangePassword));
         return;
       }
 
       try {
         const profile = await authApi.getMe();
         setUser(profile);
-        router.push(
-          profile.mustChangePassword
-            ? "/change-password?required=1"
-            : "/contracts",
-        );
+        router.replace(employeeLandingPage(profile.mustChangePassword));
       } catch (error) {
         setIsLoading(false);
       }
@@ -201,11 +197,7 @@ export default function LoginPage() {
       toast.success(data.message || "Đăng nhập thành công!");
       const profile = await authApi.getMe();
       setUser(profile);
-      router.push(
-        profile.mustChangePassword
-          ? "/change-password?required=1"
-          : "/contracts",
-      );
+      router.replace(employeeLandingPage(profile.mustChangePassword));
     } catch (error: any) {
       const message =
         error?.response?.data?.message ||

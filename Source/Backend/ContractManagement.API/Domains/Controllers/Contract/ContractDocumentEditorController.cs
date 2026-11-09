@@ -22,6 +22,7 @@ namespace ContractManagement.API.Domains.Controllers.Contract;
 [SessionAuthorize(RbacPermissions.ContractCreate)]
 public sealed partial class ContractDocumentEditorController(IContractTemplatePdfRenderer pdf, DbDtctechContext? db = null, ICurrentTenant? tenant = null) : ControllerBase
 {
+    private EditorStationeryOptions Stationery => HttpContext?.RequestServices?.GetService<Microsoft.Extensions.Options.IOptions<EditorStationeryOptions>>()?.Value ?? new();
     public sealed class ExportRequest
     {
         internal bool AllowUnboundPreview { get; set; }
@@ -60,6 +61,11 @@ public sealed partial class ContractDocumentEditorController(IContractTemplatePd
             {
                 if (node is SectionProperties) continue;
                 var sourceKey = db is not null ? $"b{sourceNodes.IndexOf(node)}" : null;
+                if (db is not null && node is Paragraph sourceParagraph && WordParagraphText.TextOnly(sourceParagraph))
+                {
+                    model.Blocks.Add(new() { Type = "paragraph", SourceKey = sourceKey, TextOnly = true, Alignment = ReadParagraph(sourceParagraph).Alignment, Runs = [new() { Text = WordParagraphText.Read(sourceParagraph) }] });
+                    continue;
+                }
                 if (db is not null && NeedsPreservation(node)) { model.Blocks.Add(PreservedBlock(node, sourceKey!, doc.MainDocumentPart!)); continue; }
                 if (node is Paragraph paragraph)
                 {
@@ -187,15 +193,22 @@ public sealed partial class ContractDocumentEditorController(IContractTemplatePd
             var part = doc.AddMainDocumentPart();
             var body = new Body();
             part.Document = new Document(body);
+            model.Layout ??= new ContractDocumentLayout();
+            var section = new SectionProperties(); ApplySectionLayout(section, model.Layout);
+            var size = section.GetFirstChild<PageSize>()!; var margins = section.GetFirstChild<PageMargin>()!;
+            var availableWidth = (int)(size.Width!.Value - margins.Left!.Value - margins.Right!.Value);
             foreach (var block in model.Blocks)
             {
                 if (block.Type == "paragraph") body.Append(WriteParagraph(block.Runs, block.Alignment, block.PageBreakBefore));
                 else
                 {
-                    body.Append(WriteTable(block));
+                    body.Append(WriteTable(block, availableWidth));
                 }
             }
-            body.Append(new SectionProperties(new PageSize { Width = 11906, Height = 16838 }, new PageMargin { Top = 1134, Bottom = 1134, Left = 1134, Right = 1134 }));
+            body.Append(section);
+            ApplyDocumentLayout(body, model);
+            try { EditorDocumentStationery.Apply(part, section, Stationery); }
+            catch (ArgumentException ex) { return BadRequest(ApiResponse<object>.Fail(ex.Message)); }
             part.Document.Save();
         }
         var bytes = stream.ToArray();

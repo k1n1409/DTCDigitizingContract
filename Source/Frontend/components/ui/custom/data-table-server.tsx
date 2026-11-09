@@ -98,6 +98,8 @@ interface DataTableProps<TData, TValue> {
   searchPlaceholder?: string;
   filterSlot?: React.ReactNode;
   isLoading?: boolean;
+  emptyMessage?: string;
+  restorePageSize?: boolean;
 
   bulkActions?: (
     selectedRows: TData[],
@@ -125,6 +127,8 @@ export function DataTable<TData, TValue>({
   searchPlaceholder = "Tìm kiếm...",
   filterSlot,
   isLoading = false,
+  emptyMessage = "Không tìm thấy dữ liệu.",
+  restorePageSize = true,
 
   bulkActions,
   getRowId,
@@ -165,13 +169,13 @@ export function DataTable<TData, TValue>({
   }, [searchValue]);
 
   useEffect(() => {
-    if (appliedStoredPageSize.current) return;
+    if (appliedStoredPageSize.current || !restorePageSize) return;
     appliedStoredPageSize.current = true;
     const storedPageSize = getStoredTablePageSize();
     if (storedPageSize && storedPageSize !== pagination.pageSize) {
       onPaginationChange({ pageIndex: 0, pageSize: storedPageSize });
     }
-  }, [onPaginationChange, pagination.pageSize]);
+  }, [onPaginationChange, pagination.pageSize, restorePageSize]);
 
   const table = useReactTable({
     data,
@@ -379,7 +383,7 @@ export function DataTable<TData, TValue>({
             })
           ) : (
             <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
-              Không tìm thấy dữ liệu.
+              {emptyMessage}
             </div>
           )}
 
@@ -394,6 +398,7 @@ export function DataTable<TData, TValue>({
       ) : (
         /* ────────────── DESKTOP TABLE VIEW ────────────── */
         <div
+          data-table-scroll
           className={`relative w-full overflow-auto rounded-md border border-border flex-1 ${
             table.getState().pagination.pageSize <= 5
               ? "min-h-108.5"
@@ -533,7 +538,7 @@ export function DataTable<TData, TValue>({
                         : "h-172"
                     } text-center text-muted-foreground`}
                   >
-                    Không tìm thấy dữ liệu.
+                    {emptyMessage}
                   </TableCell>
                 </TableRow>
               )}

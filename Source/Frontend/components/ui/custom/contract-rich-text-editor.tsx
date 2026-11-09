@@ -79,6 +79,13 @@ interface ContractRichTextEditorProps {
 }
 
 const DEFAULT_EDITOR_CONTENT_WIDTH = 800;
+const WordTextOnly = Node.create({
+  name: "wordTextOnly", group: "block", content: "text*", marks: "", isolating: true, defining: true,
+  addAttributes() { return { sourceKey: { default: null, parseHTML: element => element.getAttribute("data-word-source") }, textAlign: { default: "left", parseHTML: element => element.style.textAlign || "left" } }; },
+  parseHTML() { return [{ tag: "div[data-word-text-only]", contentElement: ".word-text-only-content" }]; },
+  renderHTML({ node }) { return ["div", { "data-word-text-only": "true", "data-word-source": node.attrs.sourceKey, class: "word-text-only my-3 rounded-lg border border-sky-200 bg-sky-50/30 p-3" }, ["div", { contenteditable: "false", class: "mb-2 select-none text-xs font-medium text-sky-800" }, "Chỉ sửa chữ · Giữ Tab, đường kẻ và định dạng Word khi xuất"], ["div", { class: "word-text-only-content min-h-6 whitespace-pre-wrap", style: `text-align:${["left", "center", "right", "justify"].includes(node.attrs.textAlign) ? node.attrs.textAlign : "left"}` }, 0]]; },
+  addKeyboardShortcuts() { return { Enter: () => this.editor.isActive("wordTextOnly"), "Shift-Enter": () => this.editor.isActive("wordTextOnly") }; },
+});
 const DocumentSourceKeys = Extension.create({ name: "documentSourceKeys", addGlobalAttributes() { return [{ types: ["paragraph", "table"], attributes: { sourceKey: { default: null, keepOnSplit: false, parseHTML: element => element.getAttribute("data-word-source"), renderHTML: attributes => attributes.sourceKey ? { "data-word-source": attributes.sourceKey } : {} } } }]; } });
 const PreservedWordBlock = Node.create({
   name: "preservedWordBlock", group: "block", atom: true, draggable: true,
@@ -91,6 +98,7 @@ const PreservedWordBlock = Node.create({
 });
 const DocumentPageBreak = Extension.create({ name: "documentPageBreak", addGlobalAttributes() { return [{ types: ["paragraph"], attributes: { pageBreakBefore: { default: false, parseHTML: element => element.dataset.pageBreakBefore === "true", renderHTML: attributes => attributes.pageBreakBefore ? { "data-page-break-before": "true", style: "break-before:page;border-top:1px dashed #94a3b8;padding-top:24px;margin-top:24px" } : {} } } }]; } });
 const insertStructured = (editor: Editor, content: JSONContent[], position = editor.state.selection.from) => {
+  if (editor.state.doc.resolve(position).parent.type.name === "wordTextOnly") return false;
   // The persisted contract schema does not allow nested tables.
   if (content.some(node => node.type === "table")) {
     const resolved = editor.state.doc.resolve(position);
@@ -206,6 +214,7 @@ const toTiptapContent = (
 ): JSONContent => ({
   type: "doc",
   content: parseContractRichText(value).blocks.map((block) => {
+    if (block.type === "paragraph" && block.textOnly) { const text = block.runs.map(r => r.text).join(""); return { type: "wordTextOnly", attrs: { sourceKey: block.sourceKey, textAlign: block.alignment || "left" }, content: text ? [{ type: "text", text }] : [] }; }
     if (block.type === "paragraph" && block.locked) return { type: "preservedWordBlock", attrs: { sourceKey: block.sourceKey, label: block.label, previewText: block.runs.map(run => run.text).join(""), previewImage: block.previewImage } };
     if (block.type === "paragraph") {
       return {
@@ -352,6 +361,7 @@ const tablePixelWidths = (table: JSONContent) => {
 const fromTiptapDocument = (document: JSONContent) => {
   const blocks: ContractRichTextBlock[] = [];
   document.content?.forEach((node) => {
+    if (node.type === "wordTextOnly") { blocks.push({ type: "paragraph", textOnly: true, sourceKey: String(node.attrs?.sourceKey || ""), alignment: node.attrs?.textAlign || "left", runs: [{ text: (node.content || []).map(n => n.text || "").join("").replace(/[\r\n\t]+/g, " ") }] }); return; }
     if (node.type === "preservedWordBlock") { blocks.push({ type: "paragraph", locked: true, sourceKey: String(node.attrs?.sourceKey || ""), label: String(node.attrs?.label || "Khối Word gốc"), runs: [{ text: String(node.attrs?.previewText || "") }], ...(node.attrs?.previewImage ? { previewImage: String(node.attrs.previewImage) } : {}) }); return; }
     if (node.type === "paragraph") {
       blocks.push({ type: "paragraph", ...tiptapParagraph(node) });
@@ -394,8 +404,8 @@ const fromTiptapDocument = (document: JSONContent) => {
   return { blocks };
 };
 
-const fromTiptapContent = (document: JSONContent, preservation?: ReturnType<typeof parseContractRichText>["preservation"]) =>
-  serializeContractRichText({ ...fromTiptapDocument(document), ...(preservation ? { preservation } : {}) });
+const fromTiptapContent = (document: JSONContent, preservation?: ReturnType<typeof parseContractRichText>["preservation"], layout?: ReturnType<typeof parseContractRichText>["layout"]) =>
+  serializeContractRichText({ ...fromTiptapDocument(document), ...(preservation ? { preservation } : {}), ...(layout ? { layout } : {}) });
 
 export function ContractRichTextEditor({
   id,
@@ -413,6 +423,7 @@ export function ContractRichTextEditor({
 }: ContractRichTextEditorProps) {
   const smartRef = useRef(smartFields);
   const preservationRef = useRef(parseContractRichText(value).preservation);
+  const layoutRef = useRef(parseContractRichText(value).layout);
   const smartEnabled = !!smartFields;
   const [find, setFind] = useState<FindOptions>({ query: "", replacement: "", matchCase: false });
   const [matchIndex, setMatchIndex] = useState(0);
@@ -504,11 +515,18 @@ export function ContractRichTextEditor({
       DocumentPageBreak,
       DocumentSourceKeys,
       PreservedWordBlock,
+      WordTextOnly,
       ContractTableCell,
       ContractTableHeader,
     ],
     content: prepareContent(value, DEFAULT_EDITOR_CONTENT_WIDTH),
     editorProps: {
+      handlePaste(view, event) {
+        if (view.state.selection.$from.parent.type.name !== "wordTextOnly") return false;
+        const text = event.clipboardData?.getData("text/plain");
+        if (text === undefined) return true;
+        event.preventDefault(); view.dispatch(view.state.tr.insertText(text.replace(/[\r\n\t]+/g, " "))); return true;
+      },
       handleDrop(view, event) {
         if (!event.dataTransfer?.types.includes(CONTRACT_SNIPPET_MIME)) return false;
         event.preventDefault();
@@ -534,7 +552,7 @@ export function ContractRichTextEditor({
       },
     },
     onUpdate: ({ editor: currentEditor }) => {
-      const nextValue = fromTiptapContent(currentEditor.getJSON(), preservationRef.current);
+      const nextValue = fromTiptapContent(currentEditor.getJSON(), preservationRef.current, layoutRef.current);
       lastEmittedValue.current = nextValue;
       onChange(nextValue);
     },
@@ -570,6 +588,7 @@ export function ContractRichTextEditor({
   useEffect(() => {
     const nextValue = value ?? "";
     preservationRef.current = parseContractRichText(nextValue).preservation;
+    layoutRef.current = parseContractRichText(nextValue).layout;
     if (!editor || lastEmittedValue.current === nextValue) return;
     lastEmittedValue.current = nextValue;
     editor.commands.setContent(
@@ -588,7 +607,7 @@ export function ContractRichTextEditor({
       const nextWidth = measureEditorContentWidth(surface);
       if (Math.abs(nextWidth - editorContentWidthRef.current) < 2) return;
       editorContentWidthRef.current = nextWidth;
-      const current = fromTiptapContent(editor.getJSON(), preservationRef.current);
+      const current = fromTiptapContent(editor.getJSON(), preservationRef.current, layoutRef.current);
       editor.chain().setMeta("addToHistory", false).setContent(prepareContent(current, nextWidth), {
         emitUpdate: false,
       }).run();
@@ -638,6 +657,8 @@ export function ContractRichTextEditor({
     });
   };
 
+  const textOnlyActive = useEditorState({ editor, selector: ({ editor: current }) => current?.isActive("wordTextOnly") ?? false });
+  const readOnlyActive = useEditorState({ editor, selector: ({ editor: current }) => current?.isActive("preservedWordBlock") ?? false });
   const tableState = useEditorState({
     editor,
     selector: ({ editor: currentEditor }) => {
@@ -692,7 +713,9 @@ export function ContractRichTextEditor({
       )}
     >
       {smartEnabled && <DocumentFindReplace value={find} onChange={value => { setFind(value); setMatchIndex(0); }} count={matches.length} index={activeMatch} onNavigate={navigateMatch} onReplace={replaceMatches} />}
-      <div className="flex shrink-0 flex-wrap items-center gap-1 border-b bg-muted/40 p-1.5">
+      {textOnlyActive && <p role="status" className="border-b bg-sky-50 px-3 py-2 text-sm text-sky-900"><strong>Chỉ sửa chữ — giữ định dạng</strong> · Tab, đường kẻ và kiểu chữ được giữ khi xuất; công cụ đổi định dạng không áp dụng tại đoạn này.</p>}
+      {!textOnlyActive && <p role="status" className="border-b bg-muted/20 px-3 py-2 text-sm"><strong>{readOnlyActive ? "Chỉ xem" : "Sửa đầy đủ"}</strong> · {readOnlyActive ? "Khối Word phức tạp chưa hỗ trợ chỉnh bên trong. Có thể giữ, di chuyển hoặc xóa cả khối; bản xuất giữ nội dung gốc." : "Có thể sửa chữ, định dạng và bố cục của vùng thông thường. Các khối có nhãn giới hạn dùng chế độ riêng."}</p>}
+      <div inert={Boolean(textOnlyActive || readOnlyActive)} className={`flex shrink-0 flex-wrap items-center gap-1 border-b bg-muted/40 p-1.5 ${textOnlyActive || readOnlyActive ? "opacity-50" : ""}`}>
         {smartEnabled && <Button type="button" size="sm" variant={editor.isActive("paragraph", { pageBreakBefore: true }) ? "secondary" : "ghost"} title="Bật/tắt ngắt trang trước đoạn đang chọn" onClick={() => editor.chain().focus().updateAttributes("paragraph", { pageBreakBefore: !editor.isActive("paragraph", { pageBreakBefore: true }) }).run()}>Ngắt trang</Button>}
         <Button
           type="button"

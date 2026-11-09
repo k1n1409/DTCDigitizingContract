@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { FolderOpen, History, Undo2, Redo2, FileText, FileDown, Eye, Download, BookTemplate, Loader2, CheckCircle2, CircleDashed } from "lucide-react";
+import { FolderOpen, History, Undo2, Redo2, FileText, FileDown, Eye, Download, BookTemplate, Loader2, CheckCircle2, CircleDashed, Trash2, AlertTriangle } from "lucide-react";
 import { useAuthStore } from "@/hooks/use-auth-store";
 import { hasPermission } from "@/lib/rbac";
 import { prepareImportedTemplate, savePreparedTemplate, type PreparedImportedTemplate } from "@/services/imported-editor-template-api";
@@ -13,7 +13,7 @@ import { DocumentFindReplace, type FindOptions } from "@/components/contracts/do
 import { findTextMatches, replaceTextMatches } from "@/lib/document-find-replace";
 import { DocumentPdfPreview } from "@/components/contracts/document-pdf-preview";
 import { useReviewUndo } from "@/hooks/use-review-undo";
-import { reviewedBlockText, replaceReviewedBlock, type ReviewField } from "@/lib/imported-contract-editing";
+import { reviewedBlockText, replaceReviewedBlock, deleteReviewedFieldValue, type ReviewField } from "@/lib/imported-contract-editing";
 import { PermissionGuard } from "@/components/auth/permission-guard";
 import { RBAC_PERMISSIONS } from "@/lib/rbac";
 import { ImportedDocumentCanvas } from "@/components/contracts/imported-document-canvas";
@@ -92,7 +92,7 @@ function Review() {
   const [conflict, setConflict] = useState(false);
   const [selected, setSelected] = useState<{ blockId: string; start: number; length: number; original: string } | null>(null);
   const [manualLabel, setManualLabel] = useState("Thông tin hợp đồng");
-  const [pending, setPending] = useState<{ title: string; text: string; action: () => void } | null>(null);
+  const [pending, setPending] = useState<{ title: string; text: string; action: () => void; destructive?: boolean; confirmText?: string } | null>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
   const lock = useRef(false);
   useLayoutEffect(() => { sourceRef.current = source; }, [source]);
@@ -217,10 +217,8 @@ function Review() {
     finally { lock.current = false; setBusy(false); }
     if (restored) { await open(source.id); toast.success("Đã khôi phục thành phiên bản mới, lịch sử cũ vẫn được giữ."); }
   };
-  const download = async (format: "original" | "docx" | "pdf", reviewed = false, previewPdf = false) => {
+  const download = async (format: "original" | "docx" | "pdf", previewPdf = false) => {
     if (!source || lock.current) return;
-    const proposed = fields.filter(f => f.status === "proposed").length;
-    if (!reviewed && format !== "original" && proposed > 0) { setPending({ title: "Xuất với trường chưa xác nhận?", text: `Còn ${proposed} trường gợi ý. Các trường này giữ nguyên giá trị gốc; chỉ trường đã xác nhận mới được sửa trong bản xuất.`, action: () => void download(format, true, previewPdf) }); return; }
     // Open synchronously from the click/confirmation, before awaiting the authenticated fetch.
     const popup = previewPdf ? window.open("about:blank", "_blank") : null;
     if (previewPdf && !popup) { toast.error("Trình duyệt chặn tab mới. Hãy cho phép popup hoặc chọn Tải PDF."); return; }
@@ -295,6 +293,24 @@ function Review() {
     try { setFields(previous => replaceReviewedBlock(block.text, block.id, value, previous, crypto.randomUUID()), `block-${block.id}`); }
     catch (e) { toast.error(e instanceof Error ? e.message : "Không sửa được đoạn."); }
   };
+  const requestDeleteField = (field: Field) => {
+    if (!source || busy || saving || historical || recoveryOffer) return;
+    const sourceId = source.id;
+    setPending({ title: `Xóa nội dung trường “${field.label}”?`, text: "Giá trị tại vị trí này sẽ được xóa khỏi bản chỉnh sửa và bản Word/PDF xuất ra. File gốc, Tab, đường kẻ và định dạng vẫn được giữ. Bạn có thể Hoàn tác sau khi xóa.", destructive: true, confirmText: "Xóa nội dung trường", action: () => {
+      if (sourceRef.current?.id !== sourceId || historical || lock.current) return;
+      try { setFields(previous => deleteReviewedFieldValue(previous, field.id), `delete-field-${field.id}`); toast.success("Đã xóa nội dung trường. Có thể Hoàn tác để khôi phục."); }
+      catch (error) { toast.error(error instanceof Error ? error.message : "Không xóa được trường."); }
+    } });
+  };
+  const requestDeleteBlock = (block: Block) => {
+    if (!source || !block.editable || busy || saving || historical || recoveryOffer) return;
+    const sourceId = source.id;
+    setPending({ title: "Xóa nội dung đoạn/ô này?", text: "Toàn bộ chữ trong đoạn/ô đang chọn sẽ bị xóa khỏi bản chỉnh sửa và bản xuất. Giữ nguyên ô bảng, Tab, đường kẻ, hình vẽ và file gốc. Có thể Hoàn tác để khôi phục.", destructive: true, confirmText: "Xóa nội dung", action: () => {
+      if (sourceRef.current?.id !== sourceId || historical || lock.current) return;
+      try { setFields(previous => replaceReviewedBlock(block.text, block.id, "", previous, crypto.randomUUID()), `delete-block-${block.id}`); toast.success("Đã xóa chữ trong đoạn/ô. Có thể Hoàn tác để khôi phục."); }
+      catch (error) { toast.error(error instanceof Error ? error.message : "Không xóa được nội dung."); }
+    } });
+  };
   const findResults = useMemo(() => !find.query ? [] : (source?.blocks || []).filter(block => block.editable).flatMap(block => findTextMatches(reviewedBlockText(block.text, block.id, fields), find.query, find.matchCase).map(match => ({ ...match, block }))), [source?.blocks, fields, find.query, find.matchCase]);
   const currentFindIndex = Math.min(findIndex, Math.max(0, findResults.length - 1));
   const navigateFind = (direction: number) => {
@@ -326,7 +342,7 @@ function Review() {
       if (e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) edits.redo(); else edits.undo(); }
       if (e.key.toLowerCase() === "y") { e.preventDefault(); edits.redo(); }
     }} className="document-workspace-ui flex min-h-0 flex-1 flex-col overflow-hidden bg-[#f1f2f7]" onDragOver={e => { if (e.dataTransfer.types.includes("Files")) e.preventDefault(); }} onDrop={e => { if (!e.dataTransfer.types.includes("Files")) return; e.preventDefault(); if (lock.current) { toast.info("Chờ thao tác lưu/xử lý hiện tại hoàn tất trước khi nhập file khác."); return; } if (e.dataTransfer.files.length !== 1) { toast.error("Chọn một DOCX mỗi lần."); return; } const file = e.dataTransfer.files[0]; confirmLeave(() => void upload(file)); }}>
-    <div className="flex min-h-16 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-primary px-4 py-3 [&_button]:h-8 [&_button]:text-xs"><h1 className="mr-auto text-sm font-semibold text-primary-foreground">Không gian tài liệu</h1><Button variant="outline" aria-expanded={libraryOpen} onClick={() => setLibraryOpen(value => !value)}><FolderOpen className="size-3.5" aria-hidden />Thư viện</Button><input hidden ref={uploadRef} type="file" accept=".docx" onChange={e => { void upload(e.target.files?.[0]); e.target.value = ""; }} />
+    <div className="flex min-h-[4rem] shrink-0 flex-wrap items-center gap-2 border-b border-border bg-primary px-4 py-3 [&_button]:h-8 [&_button]:text-xs"><h1 className="mr-auto text-sm font-semibold text-primary-foreground">Không gian tài liệu</h1><Button variant="outline" aria-expanded={libraryOpen} onClick={() => setLibraryOpen(value => !value)}><FolderOpen className="size-3.5" aria-hidden />Thư viện</Button><input hidden ref={uploadRef} type="file" accept=".docx" onChange={e => { void upload(e.target.files?.[0]); e.target.value = ""; }} />
       {source && <>
         <WorkspaceExpandButton beforeExpand={() => { setLibraryOpen(false); setPanelOpen(false); }} />
         <Button variant="outline" disabled={busy || saving || dirty || !!recoveryOffer} title={dirty ? "Chờ lưu thay đổi trước khi tạo mẫu" : "Tạo bản mẫu riêng từ phiên bản đang xem"} onClick={() => { preparedTemplate.current = null; setTemplateError(""); setSharedTemplate(false); setTemplateAcknowledged(false); setTemplateFields({}); setTemplateForm({ name: `Mẫu ${source.name.replace(/\.docx$/i, "")}`.slice(0, 100), sourceId: source.id, revision: source.revision, clientId: crypto.randomUUID() }); }}><BookTemplate className="size-3.5" aria-hidden />Lưu thành mẫu</Button>
@@ -334,9 +350,9 @@ function Review() {
         <Button size="icon" className="size-8" variant="outline" title="Hoàn tác (Ctrl/Cmd+Z)" aria-label="Hoàn tác" disabled={busy || historical || !edits.canUndo} onClick={edits.undo}><Undo2 className="size-4" aria-hidden /></Button>
         <Button size="icon" className="size-8" variant="outline" title="Làm lại (Ctrl/Cmd+Shift+Z)" aria-label="Làm lại" disabled={busy || historical || !edits.canRedo} onClick={edits.redo}><Redo2 className="size-4" aria-hidden /></Button>
         <Button variant="outline" disabled={busy || saving} onClick={() => void download("original")}><FileDown className="size-3.5" aria-hidden />File gốc</Button>
-        <Button variant="outline" title="Xem trước bản Word đã sửa dưới dạng PDF trong tab mới, không tải file" disabled={busy || saving} onClick={() => void download("pdf", false, true)}><FileText className="size-3.5" aria-hidden />Xem Word</Button>
+        <Button variant="outline" title="Xem trước bản Word đã sửa dưới dạng PDF trong tab mới, không tải file" disabled={busy || saving} onClick={() => void download("pdf", true)}><FileText className="size-3.5" aria-hidden />Xem Word</Button>
         <Button size="icon" variant="outline" title="Tải bản Word đã sửa (.docx)" aria-label="Tải Word đã sửa" disabled={busy || saving} onClick={() => void download("docx")}><Download className="size-3.5" /></Button>
-        <Button variant="outline" disabled={busy || saving} onClick={() => void download("pdf", false, true)}><Eye className="size-3.5" aria-hidden />Xem PDF</Button>
+        <Button variant="outline" disabled={busy || saving} onClick={() => void download("pdf", true)}><Eye className="size-3.5" aria-hidden />Xem PDF</Button>
         <Button variant="outline" disabled={busy || saving} onClick={() => void download("pdf")}><Download className="size-3.5" aria-hidden />Tải PDF</Button>
       </>}
     </div>
@@ -369,7 +385,7 @@ function Review() {
             {historical && <Button size="sm" disabled={busy} onClick={() => setPending({ title: "Khôi phục phiên bản này?", text: "Tạo phiên bản mới từ bản đang xem, không xóa lịch sử.", action: () => void restore() })}>Khôi phục bản này</Button>}
           </div>
           {comparison ? <ImportedReviewComparison id={source.id} revision={source.revision} blocks={source.blocks} fields={fields} dirty={dirty} readOnly={historical || busy || !!recoveryOffer} onFocus={id => { setComparison(false); const field = fields.find(f => f.blockId === id); if (field) focus(field); else requestAnimationFrame(() => document.getElementById(`source-${id}`)?.scrollIntoView({ block: "center", behavior: "smooth" })); }} onRestore={id => setPending({ title: "Khôi phục đoạn gốc?", text: "Bỏ các thay đổi của đoạn này trong bản đang sửa. File gốc và lịch sử server không bị xóa.", action: () => setFields(previous => previous.map(f => f.blockId === id ? { ...f, value: f.original, status: "proposed" } : f)) })} /> : pdfMode ? <DocumentPdfPreview key={`${source.id}:${source.revision}`} kind="imported" id={source.id} revision={source.revision} /> : <ImportedDocumentCanvas blocks={source.blocks} fields={fields} original={!preview} readOnly={historical || !!recoveryOffer} busy={busy}
-            onChange={editBlock} renderOriginal={renderText} onSelect={capture}
+            onChange={editBlock} onDelete={requestDeleteBlock} renderOriginal={renderText} onSelect={capture}
             onFocusBlock={id => { const field = fields.find(f => f.blockId === id); if (field) setActive(field.id); }}
             panelOpen={panelOpen} onTogglePanel={() => setPanelOpen(value => !value)} />}
         </div>
@@ -387,7 +403,8 @@ function Review() {
             {fields.length > 0 && visibleFields.length === 0 && <p className="text-sm text-muted-foreground">Không có trường khớp bộ lọc.</p>}
             {fields.length === 0 && <p className="text-sm text-muted-foreground">Chưa nhận diện được trường. Bôi đen giá trị trong bản gốc rồi gán thủ công.</p>}
             {visibleFields.map(field => <DocumentFieldCard key={field.id} id={`field-${field.id}`} title={field.label}
-              subtitle={`${field.party} · ${field.blockId} · ${field.original}`} status={statusLabel[field.status]} expanded={active === field.id}
+              subtitle={`${field.party} · ${field.blockId} · ${field.original}`} status={field.status === "confirmed" && field.value === "" ? "Đã xóa nội dung · File gốc được giữ nguyên" : statusLabel[field.status]} expanded={active === field.id}
+              actions={<Button type="button" size="icon" variant="ghost" className="size-8 rounded-lg text-destructive hover:bg-destructive/10 hover:text-destructive" aria-label={`Xóa nội dung trường ${field.label}`} title="Xóa nội dung trường" disabled={busy || saving || historical || !!recoveryOffer || (field.status === "confirmed" && field.value === "")} onClick={() => requestDeleteField(field)}><Trash2 className="size-4" /></Button>}
               onToggle={() => active === field.id ? setActive("") : focus(field)}>
               <fieldset disabled={busy || historical || !!recoveryOffer} className="min-w-0 space-y-3 disabled:opacity-60">
                 <p className="text-xs text-muted-foreground">{source.blocks.find(b => b.id === field.blockId)?.context} · {field.blockId} · Vị trí {field.start}–{field.start + field.length}</p>
@@ -396,7 +413,7 @@ function Review() {
                 <div className="rounded-lg border bg-background p-3"><p className="mb-1 text-xs font-medium text-muted-foreground">Giá trị gốc</p><p className="max-h-36 overflow-y-auto whitespace-pre-wrap break-words text-sm">{field.original}</p></div>
                 <div className="space-y-1"><Label htmlFor={`value-${field.id}`}>Giá trị thay thế</Label><DocumentFieldValue id={`value-${field.id}`} value={field.value} singleLine onChange={value => change(field.id, { value, status: "confirmed" })} /></div>
                 <div className="grid grid-cols-2 gap-2"><Button size="sm" disabled={!field.label.trim() || field.status === "confirmed"} onClick={() => change(field.id, { status: "confirmed" })}>Xác nhận</Button><Button size="sm" variant="outline" disabled={field.status === "ignored"} onClick={() => change(field.id, { status: "ignored" })}>Bỏ qua</Button></div>
-                <div className="flex flex-wrap gap-1 border-t pt-2"><Button size="sm" variant="ghost" className="text-destructive" onClick={() => setPending({ title: "Xóa giá trị khỏi bản xuất?", text: `Giá trị “${field.original.slice(0, 160)}${field.original.length > 160 ? "…" : ""}” tại vị trí đã chọn sẽ thành trống trong bản chỉnh sửa. File gốc vẫn giữ nguyên.`, action: () => change(field.id, { value: "", status: "confirmed" }) })}>Xóa giá trị</Button><Button size="sm" variant="ghost" onClick={() => setPending({ title: "Bỏ liên kết trường?", text: "Chỉ bỏ trường khỏi danh sách rà soát, không xóa nội dung trong file gốc hoặc bản xuất.", action: () => { setFields(previous => previous.filter(f => f.id !== field.id)); setActive(""); setDirty(true); } })}>Bỏ gán</Button></div>
+                <div className="flex flex-wrap gap-1 border-t pt-2"><Button size="sm" variant="ghost" className="text-destructive" disabled={field.status === "confirmed" && field.value === ""} onClick={() => requestDeleteField(field)}>Xóa nội dung trường</Button><Button size="sm" variant="ghost" onClick={() => setPending({ title: "Bỏ trường khỏi danh sách rà soát?", text: "Thao tác này bỏ gán trường và hủy thay đổi của trường đó, đưa nội dung tại vị trí này về giá trị gốc. Nếu muốn làm trống chữ trong bản xuất, hãy chọn Xóa nội dung trường thay vì Bỏ gán.", confirmText: "Bỏ gán trường", destructive: true, action: () => { setFields(previous => previous.filter(f => f.id !== field.id), `unmap-${field.id}`); setActive(""); setDirty(true); } })}>Bỏ gán</Button></div>
               </fieldset>
             </DocumentFieldCard>)}
           </div>
@@ -420,7 +437,7 @@ function Review() {
       <div className="rounded-xl border bg-amber-50 p-3 text-sm text-amber-950">Mẫu vẫn giữ dữ liệu ngoài các vùng đã chọn. Bố cục Word phức tạp có thể không được bảo toàn khi chuyển sang editor. Hãy kiểm tra bản PDF sau khi chuyển.</div>
       <TemplatePrivacyOptions shared={sharedTemplate} onChange={value => { setSharedTemplate(value); if (templateForm) setTemplateForm({ ...templateForm, clientId: crypto.randomUUID() }); }} canShare={canManageTemplates} acknowledged={templateAcknowledged} onAcknowledge={setTemplateAcknowledged} disabled={busy} />
       {templateError && <p role="alert" className="text-sm text-destructive">{templateError}</p>}<div className="flex justify-end gap-2"><Button variant="outline" disabled={busy} onClick={() => { setTemplateForm(null); preparedTemplate.current = null; }}>Hủy</Button><Button disabled={busy || saving || dirty || !templateAcknowledged || !templateForm?.name.trim()} onClick={() => void createEditorTemplate()}>{busy ? <Loader2 className="size-4 animate-spin" /> : <BookTemplate className="size-4" />}{busy ? "Đang tạo mẫu..." : "Lưu mẫu và mở soạn thảo"}</Button></div></DialogContent></Dialog>
-    <ConfirmDialog isOpen={pending !== null} isLoading={saving || busy} onClose={() => setPending(null)} title={pending?.title || "Xác nhận"} description={pending?.text || ""} confirmText="Tiếp tục" onConfirm={() => { const action = pending?.action; setPending(null); action?.(); }} />
+    <ConfirmDialog isOpen={pending !== null} isLoading={saving || busy} variant={pending?.destructive ? "destructive" : "default"} icon={pending?.destructive ? <AlertTriangle className="size-5 shrink-0 text-destructive" /> : undefined} onClose={() => setPending(null)} title={pending?.title || "Xác nhận"} description={pending?.text || ""} confirmText={pending?.confirmText || "Tiếp tục"} onConfirm={() => { const action = pending?.action; setPending(null); action?.(); }} />
   </main></>;
 }
 export default function ImportedContractPage() { return <PermissionGuard permission={RBAC_PERMISSIONS.contractCreate}><Review /></PermissionGuard>; }

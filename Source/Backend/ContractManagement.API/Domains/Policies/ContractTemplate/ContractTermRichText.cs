@@ -40,10 +40,12 @@ public static class ContractTermRichText
             }
             if (parsed.Preservation is { } preservation && (preservation.SourceId == Guid.Empty || preservation.Sha256 is not { Length: 64 } || preservation.FieldKeys is null || preservation.FieldKeys.Count > 200 || preservation.FieldKeys.Any(key => key is null || !System.Text.RegularExpressions.Regex.IsMatch(key, "^[A-Z][A-Z0-9_]{0,79}$")))) return false;
 
+            if (parsed.Layout is { } layout && !layout.IsValid()) return false;
             foreach (var block in parsed.Blocks)
             {
                 if (block.SourceKey is not null && !System.Text.RegularExpressions.Regex.IsMatch(block.SourceKey, "^b[0-9]{1,5}$")) return false;
                 if (block.Locked && (parsed.Preservation is null || block.SourceKey is null)) return false;
+                if (block.TextOnly && (block.Type != "paragraph" || block.Locked || parsed.Preservation is null || block.SourceKey is null || block.Runs is null || block.Runs.Any(r => r?.Text is null || r.Text.Any(c => c is '\r' or '\n' or '\t')))) return false;
                 if (block.Label?.Length > 128 || block.PreviewImage?.Length > 250000 || (block.PreviewImage is not null && !System.Text.RegularExpressions.Regex.IsMatch(block.PreviewImage, "^data:image/(png|jpeg);base64,[A-Za-z0-9+/=]+$"))) return false;
                 if (block.Type == "paragraph")
                 {
@@ -179,7 +181,26 @@ public static class ContractTermRichText
 public sealed class ContractTermRichTextDocument
 {
     public List<ContractTermRichTextBlock> Blocks { get; set; } = [];
+    public ContractDocumentLayout? Layout { get; set; }
     public ContractEditorPreservation? Preservation { get; set; }
+}
+
+public sealed class ContractDocumentLayout
+{
+    public string Paper { get; set; } = "A4";
+    public string Orientation { get; set; } = "portrait";
+    public double MarginTop { get; set; } = 20;
+    public double MarginBottom { get; set; } = 20;
+    public double MarginLeft { get; set; } = 20;
+    public double MarginRight { get; set; } = 20;
+    public double LineSpacing { get; set; } = 1.15;
+    public double SpaceBefore { get; set; }
+    public double SpaceAfter { get; set; } = 6;
+    public bool IsValid() => Paper is "A4" or "A5" && Orientation is "portrait" or "landscape"
+        && new[] { MarginTop, MarginBottom, MarginLeft, MarginRight }.All(v => double.IsFinite(v) && v is >= 5 and <= 50)
+        && double.IsFinite(LineSpacing) && LineSpacing is >= 1 and <= 3
+        && double.IsFinite(SpaceBefore) && SpaceBefore is >= 0 and <= 72
+        && double.IsFinite(SpaceAfter) && SpaceAfter is >= 0 and <= 72;
 }
 
 public sealed class ContractEditorPreservation
@@ -193,6 +214,7 @@ public sealed class ContractTermRichTextBlock
 {
     public string? SourceKey { get; set; }
     public bool Locked { get; set; }
+    public bool TextOnly { get; set; }
     public string? Label { get; set; }
     public string? PreviewImage { get; set; }
     public string Type { get; set; } = string.Empty;

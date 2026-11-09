@@ -482,6 +482,7 @@ export interface SaveContractTemplatePaymentMilestoneRequest {
 }
 
 export interface ContractTemplateVersionDetailResponse {
+  hasAdministrativeTextEdits?: boolean;
   requiresSections: boolean;
   contractDirection: ContractDirection;
   templateVersionId: number;

@@ -3,6 +3,14 @@ export type ReviewField = {
   value: string; label: string; party: string; status: "proposed" | "confirmed" | "ignored";
 };
 
+/** Keep the immutable anchor: removing the patch itself would restore the original value. */
+export function deleteReviewedFieldValue(fields: ReviewField[], id: string) {
+  const field = fields.find(f => f.id === id);
+  if (!field) throw new Error("Trường không còn tồn tại. Hãy mở lại danh sách.");
+  if (fields.some(f => f.id !== id && f.blockId === field.blockId && f.status === "confirmed" && f.start < field.start + field.length && field.start < f.start + f.length)) throw new Error("Trường chồng lấn vùng đã sửa. Hãy rà soát vùng đó trước khi xóa.");
+  return fields.map(f => f.id === id ? { ...f, value: "", status: "confirmed" as const } : f);
+}
+
 export function reviewedBlockText(text: string, blockId: string, fields: ReviewField[]) {
   let result = text;
   const patches = fields.filter(f => f.blockId === blockId && f.status === "confirmed").sort((a, b) => b.start - a.start);

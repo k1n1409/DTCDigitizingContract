@@ -54,7 +54,18 @@ public sealed class VoidContractPaymentRequest
 
 public sealed class CompleteContractRequest
 {
+    [MaxLength(1000)] public string? Reason { get; set; }
     public int CurrentVersionId { get; set; }
     public string ContractRowVersion { get; set; } = string.Empty;
     public string VersionRowVersion { get; set; } = string.Empty;
+}
+
+public sealed class UpdateContractOutcomeRequest
+{
+    [Range(1, int.MaxValue)] public int CurrentVersionId { get; set; }
+    [Required] public string ContractRowVersion { get; set; } = "";
+    [Required] public string VersionRowVersion { get; set; } = "";
+    [EnumDataType(typeof(ContractManagement.API.Common.Enums.ContractOutcome))]
+    public ContractManagement.API.Common.Enums.ContractOutcome Outcome { get; set; }
+    [MaxLength(1000)] public string? Reason { get; set; }
 }

@@ -17,6 +17,7 @@ export interface CatalogPickerItem {
   sourceId: number;
   itemType: ContractItemType;
   name: string | null;
+  code?: string | null;
   nameEn: string | null;
   unitName: string | null;
   unitNameEn: string | null;

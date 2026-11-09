@@ -6,7 +6,9 @@ namespace ContractManagement.Infrastructure.Persistence.Application.Models;
 /// Điều khoản snapshot thuộc một phiên bản hợp đồng cụ thể.
 ///
 /// Khi tạo version mới, hệ thống sao chép các term của version cũ
-/// thành những row mới, không sửa ngược term thuộc version đã khóa.
+/// thành những row mới. Ngoại lệ sửa chữ trực tiếp sau khóa chỉ qua luồng
+/// administrative correction có quyền riêng và lưu đầy đủ nội dung trước/sau;
+/// snapshot pháp lý và artifact đã duyệt/ký vẫn bất biến.
 /// </summary>
 public partial class TblContractTerm
 {

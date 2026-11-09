@@ -6,7 +6,7 @@ using DocumentFormat.OpenXml.Wordprocessing;
 
 namespace ContractManagement.API.Domains.Services.Contract;
 
-public sealed record LegacyTextBlock(string Id, string Text, string Context, bool Editable);
+public sealed record LegacyTextBlock(string Id, string Text, string Context, bool Editable, string EditMode = "text-only", string? EditReason = null);
 public sealed class LegacyField
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -63,7 +63,7 @@ public static class LegacyWordDocument
     private static List<Paragraph> Paragraphs(WordprocessingDocument doc) => doc.MainDocumentPart?.Document?.Body?.Descendants<Paragraph>().Where(p => !p.Ancestors<Paragraph>().Any()).ToList() ?? throw new ArgumentException("Không có phần thân DOCX.");
     private static List<Text> Texts(Paragraph p) => p.Descendants<Text>().Where(t => t.Ancestors<Paragraph>().FirstOrDefault() == p).ToList();
     private static string TextOf(Paragraph p) => string.Concat(Texts(p).Select(t => t.Text));
-    private static bool Editable(Paragraph p) => !p.Descendants<FieldChar>().Any() && !p.Descendants<SimpleField>().Any() && !p.Descendants<Drawing>().Any() && !p.Descendants<Break>().Any() && !p.Descendants<TabChar>().Any() && !p.Descendants<InsertedRun>().Any() && !p.Descendants<DeletedRun>().Any() && !p.Descendants<Hyperlink>().Any() && !p.Ancestors<SdtElement>().Any() && !p.Descendants<SdtElement>().Any();
+    private static bool Editable(Paragraph p) => WordParagraphText.CanEdit(p);
 
     public static List<LegacyTextBlock> Read(byte[] bytes)
     {
@@ -92,7 +92,15 @@ public static class LegacyWordDocument
                 var cell = p.Ancestors<TableCell>().FirstOrDefault();
                 var context = "Đoạn văn";
                 if (cell?.Parent is TableRow row && row.Parent is Table table) context = $"Bảng {tables.IndexOf(table) + 1} · dòng {table.Elements<TableRow>().ToList().IndexOf(row) + 1} · ô {row.Elements<TableCell>().ToList().IndexOf(cell) + 1}";
-                return new LegacyTextBlock($"p-{i}", TextOf(p), context, Editable(p));
+                var editable = Editable(p);
+                var reason = editable ? "Chỉ sửa chữ; giữ kiểu chữ, căn lề, Tab và hình vẽ của Word khi xuất."
+                    : p.Descendants<FieldChar>().Any() || p.Descendants<SimpleField>().Any() ? "Có trường Word tự động; sửa có thể làm mất công thức hoặc giá trị tự cập nhật."
+                    : p.Descendants<InsertedRun>().Any() || p.Descendants<DeletedRun>().Any() ? "Có thay đổi đang theo dõi (Track Changes); cần xử lý trong Word trước."
+                    : p.Descendants<Hyperlink>().Any() ? "Có liên kết Word; vùng này đang được giữ nguyên để tránh làm mất liên kết."
+                    : p.Descendants<Break>().Any() ? "Có ngắt dòng/ngắt trang đặc biệt; chưa hỗ trợ sửa trực tiếp."
+                    : p.Ancestors<SdtElement>().Any() || p.Descendants<SdtElement>().Any() ? "Có content control của Word; cần chỉnh trong Word gốc."
+                    : "Ảnh/đối tượng không có vùng chữ độc lập để chỉnh; nội dung vẫn được giữ khi xuất.";
+                return new LegacyTextBlock($"p-{i}", TextOf(p), context, editable, editable ? "text-only" : "read-only", reason);
             }).ToList();
         }
         catch (Exception ex) when (ex is InvalidDataException or OpenXmlPackageException or System.Xml.XmlException)

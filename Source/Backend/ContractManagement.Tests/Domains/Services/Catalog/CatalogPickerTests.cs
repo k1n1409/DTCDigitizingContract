@@ -34,6 +34,8 @@ public sealed class CatalogPickerTests
         Assert.Equal(116, boundary.TotalCount); Assert.Equal(24, boundary.TotalPages);
         Assert.Equal(["Product:2", "Product:1", "Service:9", "Service:8", "Service:7"],
             boundary.Items.Select(x => $"{x.ItemType}:{x.SourceId}").ToArray());
+        Assert.Equal("P-002", boundary.Items[0].Code);
+        Assert.Null(boundary.Items[2].Code);
         var keys = new List<string>();
         for (var page = 1; page <= boundary.TotalPages; page++)
         {

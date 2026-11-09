@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { UserProfileDto } from "@/services/auth-api";
 import { purgeReviewRecovery } from "@/lib/review-recovery";
+import { clearContractList } from "@/lib/contract-list-return";
 
 interface AuthState {
   user: UserProfileDto | null;
@@ -15,7 +16,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   setUser: (userData) => {
     const previous = get().user;
-    if (previous && (!userData || previous.tenantId !== userData.tenantId || previous.employeeId !== userData.employeeId)) purgeReviewRecovery();
+    if (previous && (!userData || previous.tenantId !== userData.tenantId || previous.employeeId !== userData.employeeId)) {
+      purgeReviewRecovery();
+      clearContractList();
+    }
     set({
       user: userData,
       isAuthenticated: !!userData,
@@ -24,6 +28,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   logout: () => {
     purgeReviewRecovery();
+    clearContractList();
     set({
       user: null,
       isAuthenticated: false,

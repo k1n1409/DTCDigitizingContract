@@ -768,6 +768,8 @@ export function ContractAcceptanceRecords({
         )}
       </CardHeader>
       <CardContent className="space-y-5">
+        {!canManage && <p className="rounded-lg border bg-muted/30 p-3 text-sm">Bạn có quyền xem biên bản nhưng không thể tạo hoặc cập nhật. Hãy liên hệ người có quyền quản lý nghiệm thu.</p>}
+        {canCreate && templates.length === 0 && <p className="rounded-lg border bg-muted/30 p-3 text-sm">Chưa có mẫu biên bản nghiệm thu khả dụng để tạo biên bản.</p>}
         {canManage &&
           contract.status === ContractStatus.Signed &&
           !signedActive && (

@@ -243,6 +243,29 @@ namespace ContractManagement.Domains.Controllers.Contract
         /// <response code="404">
         /// Không tìm thấy hợp đồng hoặc người dùng không có quyền xem.
         /// </response>
+        [HttpGet("{contractId:int}/editor-source/{format}")]
+        public async Task<IActionResult> EditorSource(int contractId, string format,
+            [FromServices] ContractManagement.Infrastructure.Persistence.Application.DbDtctechContext db,
+            [FromServices] ContractManagement.Domains.Interfaces.ContractTemplate.IContractTemplatePdfRenderer pdf,
+            CancellationToken ct)
+        {
+            if (format is not ("docx" or "pdf")) return BadRequest();
+            var actor = HttpContext.Session.GetInt32("EmployeeId") ?? throw new UnauthorizedAccessException();
+            await _contractService.GetDetailAsync(contractId, actor, CanReadTenantContracts(), CanReadExecutionContracts());
+            var row = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.SingleOrDefaultAsync(
+                db.Set<ContractManagement.Infrastructure.Persistence.Application.Models.ContractEditorSourceSnapshot>().Where(x => x.ContractId == contractId), ct);
+            if (row?.Docx is not { Length: > 0 } bytes) return NotFound();
+            Response.Headers.CacheControl = "no-store";
+            Response.Headers.ContentDisposition = $"inline; filename=contract-{contractId}-source.{format}";
+            if (format == "pdf")
+            {
+                try { bytes = await pdf.ConvertPreviewToPdfAsync(bytes, ct); }
+                catch (ContractManagement.Domains.Interfaces.ContractTemplate.ContractTemplatePdfRenderingException ex)
+                { return StatusCode(503, ApiResponse<object>.Fail(ex.Message)); }
+            }
+            return File(bytes, format == "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        }
+
         [HttpGet("{contractId:int}")]
         [ProducesResponseType(
             typeof(ApiResponse<ContractDetailResponse>),
@@ -891,6 +914,10 @@ namespace ContractManagement.Domains.Controllers.Contract
 
             return employeeId.Value;
         }
+
+        [HttpGet("filter-options")]
+        public async Task<IActionResult> FilterOptions() => Ok(ApiResponse<ContractFilterOptionsResponse>.Ok(
+            await _contractService.GetFilterOptionsAsync(GetEmployeeId(), CanReadTenantContracts(), CanReadExecutionContracts())));
 
         private string GetPublicBaseUrl() =>
             $"{Request.Scheme}://{Request.Host.Value}";

@@ -29,6 +29,7 @@ import {
   TemplateVersionStatusBadge,
 } from "@/components/contract-templates/contract-template-status";
 import { ContractTemplateTermsEditor } from "@/components/contract-templates/contract-template-terms-editor";
+import { AdministrativeTextEditor } from "@/components/contracts/administrative-text-editor";
 import { ContractTemplateLegalBasesEditor } from "@/components/contract-templates/contract-template-legal-bases-editor";
 import { ContractTemplateItemTableLayoutEditor } from "@/components/contract-templates/contract-template-item-table-layout-editor";
 import { ContractTemplateAppendicesEditor } from "@/components/contract-templates/contract-template-appendices-editor";
@@ -590,6 +591,8 @@ export default function ContractTemplateVersionWorkspacePage() {
       <Header title="Khu vực biên soạn mẫu hợp đồng" />
       <div className="grow overflow-y-auto p-3 sm:p-6 lg:p-10">
         <div className="mx-auto space-y-6">
+          {version?.status === TemplateVersionStatus.Published && <AdministrativeTextEditor target="template" id={versionId} onSaved={() => void fetchWorkspace(false)} />}
+          {version?.hasAdministrativeTextEdits && <Alert className="border-amber-400 bg-amber-50 text-amber-950"><AlertTitle>Mẫu đã được chỉnh sửa trực tiếp sau phát hành</AlertTitle><AlertDescription>Căn cứ/điều khoản mới áp dụng cho hợp đồng tạo tiếp theo. PDF phát hành cũ và hợp đồng đã tạo không tự thay đổi.</AlertDescription></Alert>}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <Button asChild variant="ghost" className="-ml-3">
               <Link href={`/admin/contract-templates/${templateId}`}>

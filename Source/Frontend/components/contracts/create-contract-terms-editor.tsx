@@ -26,6 +26,7 @@ import { ContractTermKind } from "@/services/contract-template-api";
 
 export interface CreateContractTermDraft {
   clientId: string;
+  wordSource?: { title: string; content: string };
   paymentMilestones: ContractPaymentMilestoneDraft[];
   sourceTemplateTermId?: number | null;
   termKind: ContractTermKind;

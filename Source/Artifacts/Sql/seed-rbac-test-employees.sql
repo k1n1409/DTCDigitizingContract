@@ -32,7 +32,7 @@ END;
 
 IF OBJECT_ID(N'dbo.__EFMigrationsHistory', N'U') IS NULL
     THROW 50004, N'Chưa có schema migration. Hãy provision tenant và chạy migration trước khi seed.', 1;
-IF NOT EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = N'20261102090713_EditorDocxLayoutPreservation')
+IF NOT EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = N'20261106024615_WordOnlyContractDrafts')
     THROW 50005, N'Tenant chưa có migration EditorDocxLayoutPreservation. Hãy cập nhật schema trước khi seed.', 1;
 
 IF (

@@ -61,10 +61,12 @@ export function ContractRichTextContent({
   }
 
   return (
-    <div className={cn("space-y-2 text-sm leading-6", className)}>
+    <div data-rich-text-content className={cn("space-y-2 text-sm leading-6", className)}>
       {document.blocks.map((block, blockIndex) =>
         block.type === "paragraph" && block.locked ? (
           <div key={blockIndex} className="my-4 space-y-2 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 p-4 text-slate-800"><p className="font-semibold">{block.label || "Khối Word gốc"}</p>{block.previewImage && <img src={block.previewImage} alt="Ảnh gốc trong tài liệu" className="max-h-80 max-w-full object-contain" />}<p className="whitespace-pre-wrap text-sm">{block.runs.map(run => run.text).join("").slice(0, 1000)}</p><p className="text-xs text-slate-500">Giữ nguyên trong bản Word/PDF xuất ra. Xem PDF thực tế để đối chiếu.</p></div>
+        ) : block.type === "paragraph" && block.textOnly ? (
+          <div key={blockIndex} className="my-3 rounded-lg border border-sky-200 bg-sky-50/30 p-3"><p className="mb-2 text-xs text-sky-800">Chỉ sửa chữ · Định dạng, Tab và đường kẻ gốc được giữ khi xuất</p><p className={cn("whitespace-pre-wrap", alignmentClass(block.alignment))}>{block.runs.map(r => r.text).join("")}</p></div>
         ) : block.type === "paragraph" ? (
           <p key={blockIndex} style={block.pageBreakBefore ? { breakBefore: "page", borderTop: "1px dashed #94a3b8", paddingTop: 24, marginTop: 24 } : undefined} className={cn("min-h-[1lh] whitespace-pre-wrap", alignmentClass(block.alignment))}>
             <RichRuns runs={block.runs} />

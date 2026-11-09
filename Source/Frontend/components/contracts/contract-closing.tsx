@@ -54,6 +54,7 @@ interface Props {
   canManagePayment: boolean;
   canComplete: boolean;
   onContractRefetch: () => void | Promise<void>;
+  onMutationSuccess?: (message: string) => void;
 }
 
 const MAX_EVIDENCE_SIZE = 20 * 1024 * 1024;
@@ -72,6 +73,7 @@ export function ContractClosing({
   canManagePayment,
   canComplete,
   onContractRefetch,
+  onMutationSuccess,
 }: Props) {
   const [detail, setDetail] = useState<ContractCompletionDetailResponse | null>(
     null,
@@ -119,6 +121,7 @@ export function ContractClosing({
     try {
       setBusy(true);
       await action();
+      onMutationSuccess?.(success);
       toast.success(success);
       await load(false);
       await onContractRefetch();
@@ -175,7 +178,9 @@ export function ContractClosing({
           referenceCode: milestoneReference.trim(),
         },
       );
-      toast.success(`Đã hoàn tất đợt thanh toán: ${milestone.titleVi}.`);
+      const success = `Đã hoàn tất đợt thanh toán: ${milestone.titleVi}.`;
+      onMutationSuccess?.(success);
+      toast.success(success);
       resetCompleteMilestone();
       await load(false);
       await onContractRefetch();
@@ -209,7 +214,9 @@ export function ContractClosing({
           reason: reopenReason.trim(),
         },
       );
-      toast.success(`Đã chuyển ${milestone.titleVi} về chưa nộp.`);
+      const success = `Đã chuyển ${milestone.titleVi} về chưa nộp.`;
+      onMutationSuccess?.(success);
+      toast.success(success);
       setReopeningMilestoneId(undefined);
       setReopenReason("");
       await load(false);
@@ -254,6 +261,13 @@ export function ContractClosing({
     );
   const paymentEditable =
     canManagePayment && contract.status === ContractStatus.Signed;
+  const completeReason = !canComplete
+    ? "Bạn có quyền xem hồ sơ nhưng không có quyền đánh dấu hoàn tất. Hãy liên hệ người phụ trách đóng hợp đồng."
+    : contract.status !== ContractStatus.Signed
+      ? "Chỉ hợp đồng ở trạng thái Đã ký mới có thể hoàn tất."
+      : !detail.readiness.ready
+        ? "Cần xử lý các mục sau trước khi đánh dấu hoàn tất:"
+        : busy ? "Đang xử lý. Vui lòng đợi." : "Đủ điều kiện. Bạn có thể đánh dấu hoàn tất hợp đồng.";
   const hasStructuredPayment = detail.paymentMilestones.length > 0;
   const completingMilestone = detail.paymentMilestones.find(
     (item) => item.paymentMilestoneId === completingMilestoneId,
@@ -279,7 +293,7 @@ export function ContractClosing({
 
   return (
     <div className="space-y-6">
-      <Card>
+      <Card id="contract-next-checklist" className="scroll-mt-4">
         <CardHeader>
           <CardTitle>Checklist hoàn tất hợp đồng</CardTitle>
         </CardHeader>
@@ -377,7 +391,7 @@ export function ContractClosing({
         </CardContent>
       </Card>
 
-      <ContractAcceptanceRecords
+      <div id="contract-next-acceptance" className="scroll-mt-4"><ContractAcceptanceRecords
         contract={contract}
         paymentMilestones={detail.paymentMilestones}
         readiness={detail.readiness}
@@ -387,9 +401,9 @@ export function ContractClosing({
           await load(false);
           await onContractRefetch();
         }}
-      />
+      /></div>
 
-      <Card>
+      <Card id="contract-next-payments" className="scroll-mt-4">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <WalletCards className="size-5" />
@@ -398,6 +412,13 @@ export function ContractClosing({
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
+          {!paymentEditable && <p className="rounded-lg border bg-muted/30 p-3 text-sm">
+            {contract.status === ContractStatus.Completed
+              ? "Hợp đồng đã hoàn tất. Các khoản thanh toán chỉ còn được xem."
+              : contract.status !== ContractStatus.Signed
+                ? "Chỉ có thể ghi nhận thanh toán khi hợp đồng ở trạng thái Đã ký."
+                : "Bạn có quyền xem thanh toán nhưng không có quyền ghi nhận hoặc hoàn tác. Hãy liên hệ kế toán hoặc người có quyền quản lý thanh toán."}
+          </p>}
           <div className="rounded-lg border bg-muted/20 p-3 text-sm space-y-1">
             <p>
               Bên trả: {detail.readiness.payerName || "Chưa có bản chốt"} · Bên
@@ -713,17 +734,18 @@ export function ContractClosing({
               <CheckCircle2 className="size-5" />
             </div>
             <div>
-              <p className="font-semibold text-foreground">
+              <p id="contract-complete-reason" className="font-semibold text-foreground">
                 {contract.status === ContractStatus.Completed
                   ? "Hợp đồng đã được hoàn thành!"
-                  : !canComplete
-                    ? "Bạn không có quyền thực hiện thao tác hoàn tất hợp đồng."
-                    : contract.status !== ContractStatus.Signed
-                      ? "Hợp đồng cần ở trạng thái Đã ký để có thể hoàn tất."
-                      : detail.readiness.ready
-                        ? "Tất cả điều kiện đã được thỏa mãn. Bạn có thể xác nhận đóng hợp đồng ngay."
-                        : "Cần hoàn tất đủ 3 điều kiện (chữ ký scan, nghiệm thu, thanh toán) để đóng hợp đồng."}
+                  : completeReason}
               </p>
+              {contract.status === ContractStatus.Signed && canComplete && !detail.readiness.ready && (
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+                  {detail.readiness.blockers.length
+                    ? detail.readiness.blockers.map((blocker, index) => <li key={`${blocker.code}-${index}`}>{blocker.message}</li>)
+                    : <li>Kiểm tra lại chữ ký, nghiệm thu và thanh toán trong checklist.</li>}
+                </ul>
+              )}
             </div>
           </div>
           <div className="flex shrink-0 items-center">
@@ -735,6 +757,7 @@ export function ContractClosing({
             ) : (
               <Button
                 size="lg"
+                aria-describedby="contract-complete-reason"
                 disabled={
                   !canComplete ||
                   contract.status !== ContractStatus.Signed ||

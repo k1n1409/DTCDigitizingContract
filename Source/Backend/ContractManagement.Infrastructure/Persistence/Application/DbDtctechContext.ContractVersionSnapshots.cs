@@ -12,7 +12,7 @@ public partial class DbDtctechContext
             entity.ToTable("tbl_ContractVersionLegalSnapshot", table =>
             {
                 table.HasCheckConstraint("CK_tbl_ContractVersionLegalSnapshot_Ids",
-                    "[VersionId] > 0 AND [ContractId] > 0 AND [VersionNo] > 0 AND [TemplateVersionId] > 0 AND [CreatedByEmployeeId] > 0");
+                    "[VersionId] > 0 AND [ContractId] > 0 AND [VersionNo] > 0 AND [TemplateVersionId] >= 0 AND [CreatedByEmployeeId] > 0");
                 table.HasCheckConstraint("CK_tbl_ContractVersionLegalSnapshot_Financials",
                     "[Subtotal] >= 0 AND [TotalDiscount] >= 0 AND [TotalVat] >= 0 AND [TotalAmount] >= 0");
             });

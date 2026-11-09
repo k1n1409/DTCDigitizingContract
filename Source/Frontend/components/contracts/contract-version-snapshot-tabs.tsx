@@ -129,6 +129,7 @@ export function ContractVersionSnapshotTabs({
   );
   return (
     <Tabs defaultValue="items" className="space-y-4">
+      {version.hasAdministrativeTextEdits && <p className="rounded-xl border border-amber-400 bg-amber-50 p-4 text-sm text-amber-950">Căn cứ/điều khoản của version này đã được hành chính sửa trực tiếp sau duyệt/ký. Dữ liệu hiển thị có thể khác snapshot pháp lý và file đã duyệt/ký ban đầu; bản file gốc vẫn được giữ nguyên.</p>}
       <TabsList className="grid h-auto w-full grid-cols-2 lg:grid-cols-5">
         <TabsTrigger value="items">
           <Package className="size-4" />

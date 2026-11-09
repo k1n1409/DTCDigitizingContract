@@ -12,6 +12,38 @@ namespace ContractManagement.API.Domains.Controllers.Contract;
 
 public sealed partial class ContractDocumentEditorController
 {
+    private static void ApplySectionLayout(SectionProperties section, ContractDocumentLayout layout)
+    {
+        var previousMargins = section.GetFirstChild<PageMargin>();
+        var header = previousMargins?.Header?.Value ?? 567U;
+        var footer = previousMargins?.Footer?.Value ?? 567U;
+        var gutter = previousMargins?.Gutter?.Value ?? 0U;
+        var shortSide = layout.Paper == "A5" ? 8391U : 11906U;
+        var longSide = layout.Paper == "A5" ? 11906U : 16838U;
+        section.RemoveAllChildren<PageSize>();
+        section.RemoveAllChildren<PageMargin>();
+        section.AddChild(new PageSize { Width = layout.Orientation == "landscape" ? longSide : shortSide, Height = layout.Orientation == "landscape" ? shortSide : longSide, Orient = layout.Orientation == "landscape" ? PageOrientationValues.Landscape : PageOrientationValues.Portrait }, true);
+        var twips = (double mm) => (uint)Math.Round(mm * 1440 / 25.4);
+        section.AddChild(new PageMargin { Top = (int)twips(layout.MarginTop), Bottom = (int)twips(layout.MarginBottom), Left = twips(layout.MarginLeft), Right = twips(layout.MarginRight), Header = header, Footer = footer, Gutter = gutter }, true);
+    }
+
+    private static void ApplyDocumentLayout(Body body, ContractTermRichTextDocument model)
+    {
+        if (model.Layout is not { } layout) return;
+        foreach (var section in body.Descendants<SectionProperties>()) ApplySectionLayout(section, layout);
+        // Protected blocks keep their paragraph formatting. Only editable blocks receive spacing.
+        var nodes = body.ChildElements.Where(n => n is not SectionProperties).ToList();
+        for (var i = 0; i < model.Blocks.Count && i < nodes.Count; i++)
+        {
+            if (model.Blocks[i].Locked || model.Blocks[i].TextOnly) continue;
+            var paragraphs = nodes[i] is Paragraph p ? new[] { p }.AsEnumerable() : nodes[i].Descendants<Paragraph>();
+            foreach (var paragraph in paragraphs)
+            {
+                var properties = paragraph.ParagraphProperties ?? paragraph.PrependChild(new ParagraphProperties());
+                properties.SpacingBetweenLines = new SpacingBetweenLines { Before = Math.Round(layout.SpaceBefore * 20).ToString(System.Globalization.CultureInfo.InvariantCulture), After = Math.Round(layout.SpaceAfter * 20).ToString(System.Globalization.CultureInfo.InvariantCulture), Line = Math.Round(layout.LineSpacing * 240).ToString(System.Globalization.CultureInfo.InvariantCulture), LineRule = LineSpacingRuleValues.Auto };
+            }
+        }
+    }
     private static bool NeedsPreservation(OpenXmlElement node)
     {
         if (node is not Paragraph and not Table) return true;
@@ -45,6 +77,7 @@ public sealed partial class ContractDocumentEditorController
             var body = doc.MainDocumentPart!.Document!.Body!;
             var original = body.ChildElements.Select(n => n.CloneNode(true)).ToList();
             var pageSection = original.OfType<SectionProperties>().LastOrDefault();
+            if (model.Layout is not null) ApplySectionLayout(pageSection ??= new SectionProperties(), model.Layout);
             var pageWidth = (int)(pageSection?.GetFirstChild<PageSize>()?.Width?.Value ?? 11906U);
             var pageMargin = pageSection?.GetFirstChild<PageMargin>();
             var availableWidth = pageWidth - (int)(pageMargin?.Left?.Value ?? 1134U) - (int)(pageMargin?.Right?.Value ?? 1134U);
@@ -58,6 +91,12 @@ public sealed partial class ContractDocumentEditorController
                 {
                     if (key.Length < 2 || key[0] != 'b' || !int.TryParse(key[1..], out var at) || at < 0 || at >= original.Count || original[at] is SectionProperties) throw new ArgumentException("Liên kết khối Word không hợp lệ. Hãy nhập lại tài liệu.");
                     originalNode = original[at].CloneNode(true);
+                }
+                if (block.TextOnly)
+                {
+                    if (originalNode is not Paragraph textParagraph || !WordParagraphText.TextOnly(textParagraph)) throw new ArgumentException("Vùng chỉ sửa chữ không khớp tài liệu gốc. Hãy nhập lại DOCX.");
+                    WordParagraphText.Replace(textParagraph, string.Concat(block.Runs.Select(r => r.Text)));
+                    nodes.Add(textParagraph); continue;
                 }
                 if (block.Locked)
                 {
@@ -85,10 +124,11 @@ public sealed partial class ContractDocumentEditorController
                 }
                 else nodes.Add(WriteTable(block, availableWidth));
             }
-            var section = original.OfType<SectionProperties>().LastOrDefault();
+            var section = pageSection;
             body.RemoveAllChildren(); body.Append(nodes);
             if (nodes.Count == 0) body.Append(new Paragraph());
             if (section is not null) body.Append(section);
+            ApplyDocumentLayout(body, model);
             BindPreservedTokens(doc, request);
             doc.MainDocumentPart.Document.Save();
             RemoveUnusedImages(doc);

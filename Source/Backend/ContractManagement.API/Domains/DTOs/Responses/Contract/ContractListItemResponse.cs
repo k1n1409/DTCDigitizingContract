@@ -19,6 +19,7 @@ namespace ContractManagement.API.Domains.DTOs.Responses.Contract
         public ContractType ContractType { get; set; }
 
         public ContractStatus Status { get; set; }
+        public ContractOutcome Outcome { get; set; }
 
         public int CustomerId { get; set; }
 

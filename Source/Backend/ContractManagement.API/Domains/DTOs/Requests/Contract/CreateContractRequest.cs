@@ -8,6 +8,11 @@ namespace ContractManagement.API.Domains.DTOs.Requests.Contract
     /// </summary>
     public class CreateContractRequest : IValidatableObject
     {
+        // Only the authenticated editor handoff endpoint may populate these fields.
+        [System.Text.Json.Serialization.JsonIgnore] public Guid? EditorSourceDocumentId { get; set; }
+        [System.Text.Json.Serialization.JsonIgnore] public int? EditorSourceRevision { get; set; }
+        [System.Text.Json.Serialization.JsonIgnore] public string? EditorSourceTitle { get; set; }
+        [System.Text.Json.Serialization.JsonIgnore] public byte[]? EditorSourceDocx { get; set; }
         [System.Text.Json.Serialization.JsonRequired]
         [EnumDataType(typeof(ContractDirection))]
         public ContractDirection ContractDirection { get; set; }
@@ -26,9 +31,9 @@ namespace ContractManagement.API.Domains.DTOs.Requests.Contract
         public ContractType ContractType { get; set; }
 
         /// <summary>
-        /// Chỉ chấp nhận TemplateVersion đã Published.
+        /// Version Published, hoặc 0 chỉ khi tạo từ bản Word đã rà soát.
         /// </summary>
-        [Range(1, int.MaxValue)]
+        [Range(0, int.MaxValue)]
         public int TemplateVersionId { get; set; }
 
         /// <summary>

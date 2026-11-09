@@ -19,7 +19,7 @@ Không chạy vào Central. Không cần xóa dữ liệu. Build/restart backend
 1. Nhập DOCX: lưu một bản gốc bất biến trong `tbl_ContractEditorSourceAsset`, theo tenant/tài khoản và SHA-256.
 2. Editor chỉ lưu tham chiếu nguồn và liên kết từng khối/đoạn. Không nhét toàn bộ DOCX vào mỗi lần tự lưu.
 3. Đoạn văn và bảng thông thường vẫn chỉnh trực tiếp. Sửa chữ giữ các thuộc tính Word không được biểu diễn hết trong editor: giãn dòng, kiểu đoạn, đường viền bảng và các thuộc tính sẵn có.
-4. Ảnh/hình vẽ, bảng lồng, trường Word phức tạp và các vùng không hỗ trợ được biểu diễn bằng khối nét đứt chỉ xem. Có thể di chuyển, nhân đôi hoặc xóa cả khối; không sửa chữ bên trong trực tiếp.
+4. Đoạn có chữ kèm Tab/đường kẻ/hình vẽ an toàn có chế độ **Chỉ sửa chữ**: chỉ cập nhật text trong Word gốc, giữ các run/kiểu chữ, Tab và đối tượng. Không đổi định dạng hoặc tách đoạn ở vùng này. Ảnh đơn lẻ, bảng lồng, trường Word phức tạp và vùng chưa hỗ trợ vẫn là khối nét đứt chỉ xem; có thể di chuyển, nhân đôi hoặc xóa cả khối.
 5. Khi xuất, mở bản sao gói Word gốc và áp dụng thay đổi. Các part ảnh, header/footer, styles/theme/numbering cùng lề/khổ/hướng trang được giữ, thay vì dựng lại cả file theo A4 mặc định.
 6. Bảng mới sử dụng chiều rộng trang của tài liệu nguồn. Nếu thay hẳn cấu trúc bảng, phần ô mới được dựng theo cấu trúc mới; không cam kết giữ mọi kiểu trang trí riêng của các ô bị tách/gộp.
 
@@ -41,7 +41,7 @@ Không chạy vào Central. Không cần xóa dữ liệu. Build/restart backend
 
 ## Giới hạn cần biết
 
-- Editor không phải Word đầy đủ: không chỉnh trực tiếp ảnh, header/footer, bảng lồng, SmartArt hoặc đối tượng phức tạp. Giữ nguyên không đồng nghĩa chỉnh được mọi thành phần.
+- Editor không phải Word đầy đủ: không chỉnh trực tiếp ảnh, header/footer, bảng lồng, SmartArt hoặc đối tượng phức tạp. Có thể sửa riêng chữ đi kèm Tab/hình vẽ trong đoạn an toàn, nhưng không sửa đối tượng. Giữ nguyên không đồng nghĩa chỉnh được mọi thành phần.
 - Mặt giấy HTML vẫn là bản hỗ trợ soạn thảo; số trang/bố cục cuối cần xem PDF. Máy chuyển PDF cần có các font tương ứng; LibreOffice và Microsoft Word có thể dàn trang khác nhau.
 - DOCX tối đa 10 MB; giới hạn giải nén 40 MB, 3.000 đoạn và 500 khối editor. Nội dung editor sau chuyển tối đa 4 MB. File macro, đối tượng nhúng/tài nguyên ngoài không an toàn hoặc file hỏng vẫn bị từ chối.
 - Chỉnh sửa tài liệu không duy trì hiệu lực chữ ký số của bản gốc; ảnh chữ ký chỉ được giữ như ảnh, không thay thế quy trình ký/phê duyệt.

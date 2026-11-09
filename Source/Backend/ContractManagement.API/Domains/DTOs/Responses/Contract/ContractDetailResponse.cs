@@ -7,6 +7,10 @@ namespace ContractManagement.API.Domains.DTOs.Responses.Contract
     /// </summary>
     public class ContractDetailResponse
     {
+        public bool HasAdministrativeTextEdits { get; set; }
+        public Guid? EditorSourceDocumentId { get; set; }
+        public int? EditorSourceRevision { get; set; }
+        public string? EditorSourceTitle { get; set; }
         public ContractDirection ContractDirection { get; set; }
 
         public int ContractId { get; set; }
@@ -24,6 +28,9 @@ namespace ContractManagement.API.Domains.DTOs.Responses.Contract
         public int? ParentContractId { get; set; }
 
         public ContractStatus Status { get; set; }
+        public ContractOutcome Outcome { get; set; }
+        public string? OutcomeReason { get; set; }
+        public DateTime? OutcomeUpdatedAtUtc { get; set; }
 
         public DateTime? SignDate { get; set; }
 

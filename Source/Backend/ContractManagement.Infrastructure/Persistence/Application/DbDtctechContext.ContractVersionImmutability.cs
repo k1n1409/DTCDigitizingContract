@@ -5,6 +5,25 @@ namespace ContractManagement.Infrastructure.Persistence.Application;
 
 public partial class DbDtctechContext
 {
+    private int? _administrativeTextVersion;
+    /// <summary>Only exempts existing term/basis text fields. Never unlocks the version or artifacts.</summary>
+    public IDisposable BeginAdministrativeTextCorrection(int versionId)
+    {
+        if (_administrativeTextVersion.HasValue) throw new InvalidOperationException("A text correction is already active.");
+        _administrativeTextVersion = versionId;
+        return new TextCorrectionScope(this);
+    }
+    private sealed class TextCorrectionScope(DbDtctechContext db) : IDisposable
+    { public void Dispose() => db._administrativeTextVersion = null; }
+
+    private bool IsAdministrativeTextChange<T>(Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry<T> entry, int versionId) where T : class
+    {
+        if (_administrativeTextVersion != versionId || entry.State != EntityState.Modified) return false;
+        var allowed = entry.Entity is TblContractTerm
+            ? new[] { "TermTitle", "TermTitleEn", "TermContent", "TermContentEn", "UpdatedEmployeeId", "UpdatedDate" }
+            : new[] { "ContentVi", "ContentEn", "UpdatedEmployeeId", "UpdatedDate" };
+        return entry.Properties.Where(x => x.IsModified).All(x => allowed.Contains(x.Metadata.Name));
+    }
     private void ValidateLockedVersionChanges() =>
         ValidateLockedVersionChangesAsync(CancellationToken.None, useAsync: false)
             .GetAwaiter().GetResult();
@@ -16,6 +35,8 @@ public partial class DbDtctechContext
         CancellationToken cancellationToken,
         bool useAsync)
     {
+        if (ChangeTracker.Entries<AdministrativeTextEdit>().Any(IsModifiedOrDeleted))
+            throw new InvalidOperationException("Lịch sử chỉnh sửa hành chính không được sửa hoặc xóa.");
         if (ChangeTracker.Entries<TblContractVersionLegalSnapshot>().Any(IsModifiedOrDeleted)
             || ChangeTracker.Entries<TblContractVersionPartySnapshot>().Any(IsModifiedOrDeleted)
             || ChangeTracker.Entries<TblContractVersionPaymentMilestoneSnapshot>().Any(IsModifiedOrDeleted))
@@ -57,12 +78,14 @@ public partial class DbDtctechContext
         var changedVersionIds = ChangeTracker.Entries<TblContractItem>()
             .Where(IsMutated).Select(x => x.Entity.VersionId)
             .Concat(ChangeTracker.Entries<TblContractTerm>()
-                .Where(IsMutated).Select(x => x.Entity.VersionId))
+                .Where(x => IsMutated(x) && !IsAdministrativeTextChange(x, x.Entity.VersionId)).Select(x => x.Entity.VersionId))
             .Concat(ChangeTracker.Entries<TblContractLegalBasis>()
-                .Where(IsMutated).Select(x => x.Entity.VersionId))
+                .Where(x => IsMutated(x) && !IsAdministrativeTextChange(x, x.Entity.VersionId)).Select(x => x.Entity.VersionId))
             .Concat(ChangeTracker.Entries<TblContractVersionPlaceholderValue>()
                 .Where(IsMutated).Select(x => x.Entity.VersionId))
             .Concat(ChangeTracker.Entries<TblContractAppendix>()
+                .Where(IsMutated).Select(x => x.Entity.VersionId))
+            .Concat(ChangeTracker.Entries<ContractVersionEditorDocument>()
                 .Where(IsMutated).Select(x => x.Entity.VersionId))
             .Where(id => id > 0)
             .ToHashSet();

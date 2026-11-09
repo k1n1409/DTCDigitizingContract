@@ -26,7 +26,7 @@ public sealed partial class CatalogWorkspaceService
         }
 
         var productRows = products.Select(x => new CatalogPickerItemResponse {
-            SourceId = x.ProductId, ItemType = ContractItemType.Product, Name = x.ProductName,
+            SourceId = x.ProductId, ItemType = ContractItemType.Product, Name = x.ProductName, Code = x.ProductCode,
             NameEn = x.ProductNameEn, UnitName = x.UnitName, UnitNameEn = x.UnitNameEn, Price = x.ProductPrice });
         var serviceRows = services.Select(x => new CatalogPickerItemResponse {
             SourceId = x.ServiceId, ItemType = ContractItemType.Service, Name = x.ServiceName,

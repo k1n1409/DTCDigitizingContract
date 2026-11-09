@@ -434,6 +434,7 @@ builder.Services.AddScoped<
     IContractTemplatePreviewRenderer,
     ContractTemplatePreviewRenderer>();
 
+builder.Services.Configure<ContractManagement.API.Domains.Services.Contract.EditorStationeryOptions>(builder.Configuration.GetSection(ContractManagement.API.Domains.Services.Contract.EditorStationeryOptions.SectionName));
 builder.Services.AddOptions<TemplatePdfRenderingOptions>()
     .Bind(builder.Configuration.GetSection(TemplatePdfRenderingOptions.SectionName))
     .Validate(options => options.TimeoutSeconds is > 0 and <= 60,
@@ -454,6 +455,8 @@ builder.Services.AddScoped<
     TenantLegalProfileService>();
 
 builder.Services.AddScoped<ContractDocumentPreviewService>();
+builder.Services.AddScoped<IContractEditorBindingFingerprint>(provider =>
+    provider.GetRequiredService<ContractDocumentPreviewService>());
 builder.Services.AddScoped<IContractDocumentPreviewService>(provider =>
     provider.GetRequiredService<ContractDocumentPreviewService>());
 builder.Services.AddScoped<IContractSubmissionArtifactRenderer>(provider =>

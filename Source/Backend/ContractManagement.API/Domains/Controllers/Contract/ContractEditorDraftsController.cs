@@ -32,6 +32,41 @@ public sealed class ContractEditorDraftsController(DbDtctechContext db, ICurrent
     private IQueryable<ContractEditorDocument> Readable => db.Set<ContractEditorDocument>().Where(x => x.TenantId == tenant.GetRequiredTenant().TenantId && !x.IsArchived && (x.EmployeeId == Actor || (x.IsTemplate && x.IsSharedTemplate)));
     private async Task<bool> CanManageTemplates(CancellationToken ct) => EmployeePermissionCatalog.HasPermission(await db.TblEmployees.AsNoTracking().Where(x => x.EmployeeId == Actor && x.Status == 1).Select(x => x.EmployeeType).SingleOrDefaultAsync(ct), RbacPermissions.TemplateManage);
 
+    public sealed class CreateDraftFromEditorRequest
+    {
+        [Range(1, int.MaxValue)] public int Revision { get; set; }
+        public bool Reviewed { get; set; }
+        [Required] public ContractManagement.API.Domains.DTOs.Requests.Contract.CreateContractRequest Contract { get; set; } = new();
+    }
+
+    [HttpPost("{id:guid}/create-contract")]
+    public async Task<IActionResult> CreateContract(Guid id, CreateDraftFromEditorRequest request, [FromServices] ContractManagement.Domains.Interfaces.Contract.IContractService contracts, CancellationToken ct)
+    {
+        Response.Headers.CacheControl = "no-store";
+        if (!request.Reviewed) return BadRequest(ApiResponse<object>.Fail("Cần xác nhận rà soát tài liệu và dữ liệu hợp đồng."));
+        var document = await Readable.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, ct);
+        if (document is null) return NotFound();
+        if (request.Contract.TemplateVersionId == 0 && document.IsTemplate)
+            return BadRequest(ApiResponse<object>.Fail("Hãy bấm Dùng mẫu và lưu bản sao đã rà soát trước khi tạo hợp đồng."));
+        if (document.Revision != request.Revision) return Conflict(ApiResponse<object>.Fail("Tài liệu đã có phiên bản mới. Mở lại tài liệu và rà soát trước khi tạo Draft."));
+        var revision = await db.Set<ContractEditorRevision>().AsNoTracking().SingleOrDefaultAsync(x => x.DocumentId == id && x.Revision == request.Revision, ct);
+        if (revision is null) return NotFound();
+        var bindings = JsonSerializer.Deserialize<Dictionary<string, string>>(revision.Bindings) ?? [];
+        foreach (var pair in new[] { ("SOURCE_CUSTOMER_ID", request.Contract.CustomerId), ("SOURCE_EMPLOYEE_ID", request.Contract.ResponsibleEmployeeId ?? Actor) })
+            if (bindings.TryGetValue(pair.Item1, out var sourceId) && (!int.TryParse(sourceId, out var selectedId) || selectedId != pair.Item2))
+                return BadRequest(ApiResponse<object>.Fail("Khách hàng/nhân viên đã khác dữ liệu liên kết trong tài liệu. Quay lại soạn thảo để cập nhật nguồn trước."));
+        if (pdf is null) return StatusCode(503, ApiResponse<object>.Fail("Chưa cấu hình bộ xuất tài liệu."));
+        var editor = new ContractDocumentEditorController(pdf, db, tenant) { ControllerContext = ControllerContext };
+        var exported = await editor.Export("docx", new() { Content = revision.Content, Title = revision.Title, Bindings = bindings }, ct);
+        if (exported is not FileContentResult file) return exported;
+        request.Contract.EditorSourceDocumentId = id;
+        request.Contract.EditorSourceRevision = revision.Revision;
+        request.Contract.EditorSourceTitle = revision.Title;
+        request.Contract.EditorSourceDocx = file.FileContents;
+        var result = await contracts.CreateAsync(request.Contract, Actor);
+        return Created($"/api/contracts/{result.ContractId}", ApiResponse<ContractManagement.API.Domains.DTOs.Responses.Contract.CreateContractResponse>.Ok(result, "Đã tạo Draft và gắn tài liệu chính thức vào version đầu tiên."));
+    }
+
     [HttpGet("binding-values")]
     public async Task<IActionResult> BindingValues(string source, int id, CancellationToken ct)
     {
@@ -138,6 +173,7 @@ public sealed class ContractEditorDraftsController(DbDtctechContext db, ICurrent
         string? forkedContent = null;
         if (doc is null && request.IsTemplate && parsed.Preservation is not null)
         {
+            var originalLayout = parsed.Layout;
             var editor = new ContractDocumentEditorController(pdf!, db, tenant) { ControllerContext = ControllerContext };
             var exported = await editor.Export("docx", new() { Content = request.Content, Title = request.Title, Bindings = new(), AllowUnboundPreview = true }, ct);
             if (exported is not FileContentResult file) return exported;
@@ -147,6 +183,9 @@ public sealed class ContractEditorDraftsController(DbDtctechContext db, ICurrent
             request.Content = JsonSerializer.SerializeToElement(response.Data, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }).GetProperty("content").GetString()!;
             forkedContent = request.Content;
             ContractTermRichText.TryParse(request.Content, out parsed);
+            parsed.Layout = originalLayout;
+            request.Content = ContractTermRichText.Prefix + JsonSerializer.Serialize(parsed, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+            forkedContent = request.Content;
         }
         if (doc is null)
         {

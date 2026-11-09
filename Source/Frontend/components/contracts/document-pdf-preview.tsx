@@ -20,7 +20,7 @@ export function PdfThumbnail({ kind, id, revision, name }: { kind: LibraryKind; 
     void (async () => {
       try {
         if (thumbnailOwner !== owner) { thumbnails.clear(); thumbnailOwner = owner; }
-        const key = `${owner}:${kind}:${id}:${revision}`;
+        const key = `letterhead-v1:${owner}:${kind}:${id}:${revision}`;
         const cached = thumbnails.get(key);
         if (cached) {
           const image = new Image(); image.src = cached; await image.decode();

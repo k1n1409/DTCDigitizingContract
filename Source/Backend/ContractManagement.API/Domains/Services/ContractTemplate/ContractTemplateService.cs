@@ -3422,6 +3422,7 @@ public sealed partial class ContractTemplateService : IContractTemplateService
             cancellationToken);
 
         var response = MapVersionDetail(version, template);
+        response.HasAdministrativeTextEdits = await _dbContext.Set<AdministrativeTextEdit>().AnyAsync(x => x.Target == "template" && x.ParentId == versionId && x.VersionId == versionId, cancellationToken);
         response.RequiresSections = await SupportingDocumentSectionReader.IsRequiredAsync(
             _dbContext, versionId, (TemplateDocumentType)template.DocumentType, cancellationToken);
         if (version.PreviewedByEmployeeId is int previewedByEmployeeId)

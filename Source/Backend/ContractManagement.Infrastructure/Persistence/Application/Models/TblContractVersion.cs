@@ -12,6 +12,8 @@ public partial class TblContractVersion
     /// Khóa chính của phiên bản.
     /// </summary>
     public int VersionId { get; set; }
+    /// <summary>0: published-template renderer; 1: explicitly reviewed editor DOCX pinned to this version.</summary>
+    public byte DocumentMode { get; set; }
 
     /// <summary>
     /// Hợp đồng sở hữu phiên bản này.

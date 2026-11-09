@@ -10,6 +10,8 @@ namespace ContractManagement.API.Domains.DTOs.Requests.Contract
     /// </summary>
     public class UpdateContractItemRequest : CreateContractItemRequest
     {
+        // An explicit edit to the contract snapshot, not to the catalog item.
+        public bool OverrideCatalogUnit { get; set; }
         [Range(1, int.MaxValue)]
         public int? ContractItemId { get; set; }
 

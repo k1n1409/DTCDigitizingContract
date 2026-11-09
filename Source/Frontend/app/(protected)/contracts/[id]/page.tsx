@@ -28,6 +28,11 @@ import {
 } from "lucide-react";
 
 import { Header } from "@/components/ui/custom/header";
+import { ContractEditorSource } from "@/components/contracts/contract-editor-source";
+import { ContractVersionDocument } from "@/components/contracts/contract-version-document";
+import { AdministrativeTextEditor } from "@/components/contracts/administrative-text-editor";
+import { ContractNextSteps } from "@/components/contracts/contract-next-steps";
+import { getContractOutcomeLabel } from "@/services/contract-api";
 import { showConfirmToast } from "@/components/ui/custom/confirm-toast";
 import { SplitActionMenu } from "@/components/ui/custom/split-action-menu";
 import { ResourceAccessErrorState } from "@/components/auth/permission-guard";
@@ -40,6 +45,7 @@ import { ContractLegalBases } from "@/components/contracts/contract-legal-bases"
 import { downloadBlob } from "@/components/contract-templates/contract-template-utils";
 
 import {
+  canEditDirectWordDraftSettings,
   contractApi,
   CurrentContractCustomerAccessLinkResponse,
   ContractAppendixTermResponse,
@@ -78,6 +84,7 @@ import { ContractNegotiation } from "@/components/contracts/contract-negotiation
 import { ContractSignature } from "@/components/contracts/contract-signature";
 import { ContractDocuments } from "@/components/contracts/contract-attachments";
 import { ContractClosing } from "@/components/contracts/contract-closing";
+import { contractListHref, recordContractListSuccess } from "@/lib/contract-list-return";
 import { ContractAuditLog } from "@/components/contracts/contract-audit-log";
 import { TransferResponsibilityModal } from "@/components/contracts/transfer-responsibility-modal";
 import { ContractApprovalPanel } from "@/components/contracts/contract-approval-panel";
@@ -153,6 +160,8 @@ export default function ContractDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
+  const listScope = user ? `${user.tenantId}:${user.employeeId}` : "";
+  const backToList = contractListHref(listScope, Number(params.id));
   const currentEmployeeId = user?.employeeId;
   const currentPermissions = user?.permissions;
 
@@ -353,7 +362,7 @@ export default function ContractDetailPage() {
               : "Không thể truy cập hợp đồng"
           }
           description={error || "Hợp đồng này không tồn tại hoặc đã bị xóa."}
-          backHref="/contracts"
+          backHref={backToList}
           backLabel="Quay lại danh sách"
           onRetry={() => void fetchContractDetail().catch(() => undefined)}
         />
@@ -463,13 +472,17 @@ export default function ContractDetailPage() {
       }
 
       for (const item of contract.currentVersion.items) {
+        if (!item.itemName.trim()) {
+          toast.error("Vui lòng nhập tên cho tất cả sản phẩm/dịch vụ.");
+          return;
+        }
         if (
           !item.unitName?.trim() ||
           (contract.languageMode === ContractLanguageMode.Bilingual &&
             !item.unitNameEn?.trim())
         ) {
           toast.error(
-            `“${item.itemName}” thiếu đơn vị${item.unitName?.trim() ? " tiếng Anh" : ""}. Hãy cập nhật danh mục và thêm lại hạng mục trước khi lưu.`,
+            `“${item.itemName}” thiếu đơn vị${item.unitName?.trim() ? " tiếng Anh" : ""}. ${contract.status === ContractStatus.Draft ? "Hãy điền đơn vị ở mục Sản phẩm / Dịch vụ." : "Hãy cập nhật danh mục và thêm lại hạng mục trước khi lưu."}`,
           );
           return;
         }
@@ -560,6 +573,10 @@ export default function ContractDetailPage() {
           currentVersionId: contract.currentVersion.versionId,
           currentVersionRowVersion: contract.currentVersion.rowVersion,
           customerId: contract.customer.customerId,
+          ...(canEditDirectWordDraftSettings(contract) && {
+            contractDirection: contract.contractDirection,
+            languageMode: contract.languageMode,
+          }),
           contractName: contract.contractName,
           contractNameEn: contract.contractNameEn,
           effectiveDate: contract.effectiveDate,
@@ -581,6 +598,8 @@ export default function ContractDetailPage() {
             itemDescriptionEn: item.itemDescriptionEn,
             unitName: item.unitName,
             unitNameEn: item.unitNameEn,
+            overrideCatalogUnit:
+              contract.status === ContractStatus.Draft && item.overrideCatalogUnit === true,
             quantity: item.quantity,
             unitPrice: item.unitPrice,
             discountMode: item.discountMode,
@@ -953,13 +972,18 @@ export default function ContractDetailPage() {
     <>
       <Header />
 
-      <div className="grow overflow-y-auto p-2 lg:p-10 space-y-6">
+      <div className="min-h-0 grow space-y-6 overflow-y-auto p-3 sm:p-6 lg:p-10">
+        <ContractVersionDocument contractId={contract.contractId} versionId={contract.currentVersion.versionId} refreshKey={contract.rowVersion} />
+        {[ContractStatus.PendingSignature, ContractStatus.Signed, ContractStatus.Completed].includes(contract.status) && <AdministrativeTextEditor target="contract" id={contract.contractId} onSaved={() => void fetchContractDetail(false)} />}
+        {contract.hasAdministrativeTextEdits && <p className="rounded-xl border border-amber-400 bg-amber-50 p-4 text-sm text-amber-950">Căn cứ/điều khoản đã được chỉnh sửa trực tiếp sau duyệt/ký. Nội dung trên màn hình có thể khác bản Word/PDF đã duyệt/ký; các file và snapshot gốc vẫn được giữ nguyên.</p>}
+        {!!contract.outcome && <section className="rounded-xl border border-primary/30 bg-primary/5 p-4"><h2 className="font-semibold">Kết quả xử lý: {getContractOutcomeLabel(contract.outcome)}</h2><p className="mt-1 text-sm text-muted-foreground">Kết quả hành chính được lưu riêng; lịch sử duyệt/ký và chứng từ vẫn được giữ nguyên.</p>{contract.outcomeReason && <p className="mt-2 whitespace-pre-wrap">{contract.outcomeReason}</p>}</section>}
+        {contract.editorSourceDocumentId && <ContractEditorSource contractId={contract.contractId} title={contract.editorSourceTitle || "Tài liệu nguồn"} revision={contract.editorSourceRevision || 1} documentId={contract.editorSourceDocumentId} />}
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
             <Button
               variant="ghost"
               className="-ml-3 mb-2 text-muted-foreground"
-              onClick={() => router.push("/contracts")}
+              onClick={() => router.push(backToList, { scroll: false })}
             >
               <ArrowLeft className="size-4 mr-2" />
               Quay lại danh sách
@@ -1272,6 +1296,7 @@ export default function ContractDetailPage() {
           onSave={() => void handleUpdateDraft()}
         />
 
+        <ContractNextSteps key={`${contract.contractId}-${contract.rowVersion}-${contract.status}`} contract={contract} onNavigate={handleTabChange} onRefresh={() => void fetchContractDetail(false)} />
         <Tabs
           value={visibleActiveTab}
           onValueChange={handleTabChange}
@@ -1418,6 +1443,7 @@ export default function ContractDetailPage() {
               canManagePayment={canManagePayment}
               canComplete={canCompleteContract}
               onContractRefetch={() => fetchContractDetail(false)}
+              onMutationSuccess={message => recordContractListSuccess(listScope, contract.contractId, message)}
             />
           </TabsContent>
 
@@ -1437,34 +1463,20 @@ export default function ContractDetailPage() {
           />
         )}
 
-        {hasAnyUnsavedChanges && canUpdateDraft && (
-          <Alert
-            className="fixed bottom-6 right-6 z-50 w-[calc(100%-3rem)] max-w-md animate-in fade-in-0 slide-in-from-bottom-8 bg-background shadow-lg duration-300"
-            aria-live="polite"
-          >
-            <AlertTitle>Hợp đồng có thay đổi chưa được lưu</AlertTitle>
-            <AlertDescription className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <span>Bạn có muốn lưu các thay đổi vừa thực hiện không?</span>
-              <Button
-                onClick={handleUpdateDraft}
-                disabled={isUpdating || appendixOperationBusy}
-                size="sm"
-                className="shrink-0"
-              >
-                {isUpdating ? (
-                  <Loader2 className="size-4 mr-2 animate-spin" />
-                ) : (
-                  <Save className="size-4 mr-2" />
-                )}
-                Lưu thay đổi
-                <kbd className="hidden rounded bg-primary-foreground/20 px-1.5 py-0.5 text-[10px] font-mono text-primary-foreground sm:inline-block">
-                  Ctrl+S
-                </kbd>
-              </Button>
-            </AlertDescription>
-          </Alert>
-        )}
       </div>
+      {hasAnyUnsavedChanges && canUpdateDraft && (
+        <div className="z-20 flex shrink-0 flex-wrap items-center justify-between gap-2 border-t bg-card px-3 py-2.5 sm:px-6 lg:px-10">
+          <p className="flex min-w-0 items-center gap-2 text-sm font-medium" aria-live="polite">
+            <span aria-hidden className="size-2 shrink-0 rounded-full bg-amber-500" />
+            {isUpdating ? "Đang lưu thay đổi…" : "Có thay đổi chưa lưu"}
+          </p>
+          <Button onClick={handleUpdateDraft} disabled={isUpdating || appendixOperationBusy} size="sm" className="ml-auto">
+            {isUpdating ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+            Lưu thay đổi
+            <kbd className="hidden rounded bg-primary-foreground/20 px-1.5 py-0.5 text-[10px] sm:inline">Ctrl+S</kbd>
+          </Button>
+        </div>
+      )}
     </>
   );
 }

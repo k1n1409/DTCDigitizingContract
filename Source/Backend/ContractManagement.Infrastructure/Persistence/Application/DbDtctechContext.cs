@@ -190,6 +190,31 @@ public partial class DbDtctechContext : DbContext
             entity.ToTable("tbl_ImportedContractRevision"); entity.HasKey(x => new { x.DocumentId, x.Revision });
             entity.HasOne<ImportedContractDocument>().WithMany().HasForeignKey(x => x.DocumentId).OnDelete(DeleteBehavior.Cascade);
         });
+        modelBuilder.Entity<TblContract>().Property(x => x.OutcomeReason).HasMaxLength(1000);
+        modelBuilder.Entity<AdministrativeTextEdit>(e => {
+            e.ToTable("tbl_AdministrativeTextEdit"); e.HasKey(x => x.AdministrativeTextEditId);
+            e.Property(x => x.Target).HasMaxLength(16); e.Property(x => x.Kind).HasMaxLength(16);
+            e.Property(x => x.Reason).HasMaxLength(1000);
+            e.HasIndex(x => new { x.TenantId, x.Target, x.ParentId, x.VersionId });
+        });
+        modelBuilder.Entity<SavedContractFilter>(e => {
+            e.ToTable("tbl_SavedContractFilter"); e.HasKey(x => x.Id);
+            e.Property(x => x.Name).HasMaxLength(100); e.Property(x => x.FilterJson).HasMaxLength(4000);
+            e.HasIndex(x => new { x.TenantId, x.EmployeeId });
+        });
+        modelBuilder.Entity<ContractVersionEditorDocument>(entity => {
+            entity.ToTable("tbl_ContractVersionEditorDocument");
+            entity.HasKey(x => x.VersionId);
+            entity.Property(x => x.Title).HasMaxLength(100);
+            entity.Property(x => x.DocxHash).HasMaxLength(64);
+            entity.Property(x => x.BusinessHash).HasMaxLength(64);
+            entity.HasOne<TblContractVersion>().WithOne().HasForeignKey<ContractVersionEditorDocument>(x => x.VersionId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<ContractEditorSourceSnapshot>(entity => {
+            entity.ToTable("tbl_ContractEditorSourceSnapshot");
+            entity.HasKey(x => x.ContractId);
+            entity.HasOne<TblContract>().WithOne().HasForeignKey<ContractEditorSourceSnapshot>(x => x.ContractId).OnDelete(DeleteBehavior.Cascade);
+        });
         modelBuilder.Entity<ContractEditorDocument>(entity => {
             entity.ToTable("tbl_ContractEditorDocument");
             entity.HasKey(x => x.Id);
@@ -354,7 +379,7 @@ public partial class DbDtctechContext : DbContext
 
                 table.HasCheckConstraint(
                     "CK_tbl_Contract_TemplateVersionId",
-                    "[TemplateVersionId] > 0");
+                    "[TemplateVersionId] > 0 OR ([TemplateVersionId] = 0 AND [EditorSourceDocumentId] IS NOT NULL)");
 
                 // Giá trị hợp đồng không được âm.
                 table.HasCheckConstraint(
@@ -2174,7 +2199,7 @@ public partial class DbDtctechContext : DbContext
                 // TemplateVersionId phải là logical ID hợp lệ.
                 table.HasCheckConstraint(
                     "CK_tbl_ContractVersion_TemplateVersionId",
-                    "[TemplateVersionId] > 0");
+                    "[TemplateVersionId] > 0 OR ([TemplateVersionId] = 0 AND [DocumentMode] = 1)");
 
                 // Version bắt đầu từ 1, không chấp nhận 0 hoặc số âm.
                 table.HasCheckConstraint(

@@ -4,7 +4,9 @@
 /// Một phiên bản bất biến của template.
 ///
 /// Draft được phép chỉnh sửa.
-/// Published/Retired không được sửa nội dung hoặc thay DOCX.
+/// Published/Retired không được thay DOCX qua luồng sửa thông thường.
+/// Published cho phép hành chính sửa trực tiếp chữ của căn cứ/điều khoản
+/// qua endpoint có quyền riêng và lịch sử trước/sau.
 /// </summary>
 public partial class TblContractTemplateVersion
 {

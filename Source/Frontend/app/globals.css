@@ -312,7 +312,6 @@
 }
 
 /* 90%-style desktop density without browser zoom or scaled document coordinates. */
-[data-document-shell],
 .document-workspace-ui {
   --spacing: 0.225rem;
 }
@@ -340,7 +339,13 @@
   font-size: 16px;
 }
 /* Keep touch controls comfortably sized on narrow screens. */
+.document-custom-layout .tiptap p,
+.document-custom-layout [data-rich-text-content] p {
+  line-height: var(--document-line-spacing) !important;
+  margin-top: var(--document-space-before) !important;
+  margin-bottom: var(--document-space-after) !important;
+}
 @media (max-width: 767px) {
-  [data-document-shell], .document-workspace-ui { --spacing: 0.25rem; }
+  .document-workspace-ui { --spacing: 0.25rem; }
   .document-workspace-ui :is(button, input, select, label):not([data-document-content] *, [data-editor-page] *) { font-size: 16px; }
 }

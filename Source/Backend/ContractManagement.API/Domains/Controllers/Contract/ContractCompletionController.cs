@@ -70,6 +70,14 @@ public sealed class ContractCompletionController : ControllerBase
     public async Task<IActionResult> Complete(int contractId, [FromBody] CompleteContractRequest request, CancellationToken ct) =>
         Ok(ApiResponse<ContractCompletionDetailResponse>.Ok(await _service.CompleteAsync(contractId, request, EmployeeId(), ct), "Hợp đồng đã hoàn tất."));
 
+    [HttpGet("outcome"), SessionAuthorize(RbacPermissions.ContractComplete)]
+    public async Task<IActionResult> Outcome(int contractId, CancellationToken ct) =>
+        Ok(ApiResponse<ContractOutcomeResponse>.Ok(await _service.GetOutcomeAsync(contractId, EmployeeId(), ct)));
+
+    [HttpPost("outcome"), SessionAuthorize(RbacPermissions.ContractComplete)]
+    public async Task<IActionResult> UpdateOutcome(int contractId, UpdateContractOutcomeRequest request, CancellationToken ct) =>
+        Ok(ApiResponse<ContractOutcomeResponse>.Ok(await _service.UpdateOutcomeAsync(contractId, request, EmployeeId(), ct), "Đã cập nhật kết quả hợp đồng."));
+
     private int EmployeeId() => HttpContext.Session.GetInt32("EmployeeId")
         ?? throw new RbacOperationException(StatusCodes.Status401Unauthorized, AuthorizationErrorCodes.AuthenticationRequired, "Employee login is required.");
 }

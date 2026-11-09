@@ -4,12 +4,15 @@ import { useState, useEffect, useMemo } from "react";
 import {
   CalendarDays,
   ChevronLeft,
+  ChevronDown,
   ChevronRight,
   FileSignature,
   Loader2,
   Package,
+  Pencil,
   Plus,
   Search,
+  Settings2,
   Trash2,
   Truck,
   Users,
@@ -24,8 +27,11 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { formatCurrency } from "@/lib/format-currency";
+import { cn } from "@/lib/utils";
+import { ContractLookupPicker } from "./contract-lookup-picker";
 import { DateRangeFilter } from "@/components/ui/custom/date-range-filter";
 import { DecimalInput } from "@/components/ui/custom/decimal-input";
 import { IntegerInput } from "@/components/ui/custom/integer-input";
@@ -50,16 +56,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Clock } from "lucide-react";
-
 import {
   ContractDetailResponse,
+  ContractDirection,
   ContractLanguageMode,
+  ContractStatus,
   ContractItemType,
   ContractItemDiscountMode,
+  canEditDirectWordDraftSettings,
   getContractTypeLabel,
   getContractDirectionLabel,
   getContractCounterpartyLabel,
+  getContractLanguageModeLabel,
 } from "@/services/contract-api";
 import { InfoCard } from "./contract-helpers";
 import { formatDate } from "@/lib/format-date";
@@ -93,6 +101,9 @@ export function ContractOverview({
   onOpenTransferModal?: () => void;
 }) {
   const isEditable = canEdit;
+  const isDraftEditable = isEditable && contract.status === ContractStatus.Draft;
+  const canEditDocumentSettings = isEditable && canEditDirectWordDraftSettings(contract);
+  const isBilingual = contract.languageMode === ContractLanguageMode.Bilingual;
 
   const draftFinancialTotals = useMemo(
     () =>
@@ -137,19 +148,28 @@ export function ContractOverview({
     : persistedFinancialTotals;
 
   const [customers, setCustomers] = useState<CustomerLookupResponse[]>([]);
+  const [customerQuery, setCustomerQuery] = useState("");
+  const [customerLoading, setCustomerLoading] = useState(false);
+  const [customerError, setCustomerError] = useState("");
+  const [expandedItems, setExpandedItems] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     if (isEditable) {
+      let cancelled = false;
+      setCustomerLoading(true);
+      setCustomerError("");
       customerApi
         .lookup()
-        .then((items) =>
-          setCustomers(
-            items.filter(
-              (customer) => customer.status === CustomerStatus.Active,
-            ),
-          ),
-        )
-        .catch((err) => console.error(err));
+        .then((items) => {
+          if (!cancelled) setCustomers(items.filter((customer) => customer.status === CustomerStatus.Active));
+        })
+        .catch(() => {
+          if (!cancelled) setCustomerError("Không tải được danh sách đối tác. Hãy thử tải lại trang.");
+        })
+        .finally(() => {
+          if (!cancelled) setCustomerLoading(false);
+        });
+      return () => { cancelled = true; };
     }
   }, [isEditable]);
 
@@ -195,7 +215,9 @@ export function ContractOverview({
   const filteredItems = (contract.currentVersion?.items || []).filter(
     (item) =>
       (itemsTab === "all" || item.itemType === currentItemType) &&
-      item.itemName.toLowerCase().includes(itemsSearchQuery.toLowerCase()),
+      ([item.itemName, item.itemCode, item.itemNameEn].some((value) =>
+        value?.toLocaleLowerCase("vi").includes(itemsSearchQuery.trim().toLocaleLowerCase("vi"))) ||
+        (isDraftEditable && expandedItems[item.contractItemId] === true)),
   );
 
   const itemsTotalPages = Math.ceil(filteredItems.length / itemsPerPage);
@@ -278,9 +300,9 @@ export function ContractOverview({
   const handleAddCatalogItem = (catalogItem: CatalogItem) => {
     if (!contract || !contract.currentVersion) return;
     if (
-      !catalogItem.unitName?.trim() ||
-      (contract.languageMode === ContractLanguageMode.Bilingual &&
-        !catalogItem.unitNameEn?.trim())
+      !isDraftEditable &&
+      (!catalogItem.unitName?.trim() ||
+        (isBilingual && !catalogItem.unitNameEn?.trim()))
     ) {
       toast.error(
         `“${catalogItem.itemName}” thiếu đơn vị trong danh mục. Hãy cập nhật sản phẩm/dịch vụ trước khi thêm vào hợp đồng.`,
@@ -342,6 +364,7 @@ export function ContractOverview({
     });
 
     toast.success(`Đã thêm ${catalogItem.itemName}`);
+    setExpandedItems({ [newItem.contractItemId]: true });
     setItemsTab(
       catalogItem.itemType === ContractItemType.Product ? "product" : "service",
     );
@@ -359,9 +382,9 @@ export function ContractOverview({
     return new Date(date.getTime() - offset).toISOString();
   };
 
-  const handleRootChange = (
-    field: keyof ContractDetailResponse,
-    value: any,
+  const handleRootChange = <K extends keyof ContractDetailResponse>(
+    field: K,
+    value: ContractDetailResponse[K],
   ) => {
     setContract((prev) => (prev ? { ...prev, [field]: value } : prev));
   };
@@ -396,25 +419,102 @@ export function ContractOverview({
     });
   };
 
+  const handleCustomerChange = (value: string) => {
+    const found = customers.find((customer) => customer.customerId === Number(value));
+    if (!found) return;
+    setContract((previous) => previous ? {
+      ...previous,
+      customer: {
+        ...previous.customer,
+        customerId: found.customerId,
+        customerCode: found.customerCode,
+        customerFullName: found.customerFullName,
+        customerCompany: found.customerCompany,
+      },
+    } : previous);
+  };
+
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-      <Card>
+    <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+      <Card className="min-w-0">
         <CardHeader>
-          <CardTitle>Tổng quan hợp đồng</CardTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            <CardTitle>{isDraftEditable ? "Thông tin bản nháp" : "Tổng quan hợp đồng"}</CardTitle>
+            {isDraftEditable && <Badge variant="secondary"><Pencil className="size-3" /> Có thể chỉnh sửa</Badge>}
+          </div>
           <p className="text-sm text-muted-foreground">
+            {isDraftEditable ? "Cập nhật thông tin và các hạng mục bên dưới, sau đó chọn Lưu thay đổi." : <>
             Chiều giao dịch:{" "}
             {getContractDirectionLabel(contract.contractDirection)} — Đối tác:{" "}
             {getContractCounterpartyLabel(contract.contractDirection)}
+            </>}
           </p>
         </CardHeader>
         <CardContent className="space-y-5">
+          {isDraftEditable && (
+            <details className="rounded-xl border bg-muted/20">
+              <summary className="cursor-pointer px-4 py-3 text-sm">
+                <Settings2 aria-hidden className="mx-2 inline size-4 align-text-bottom text-primary" />
+                <span className="font-semibold">Thiết lập hợp đồng</span>
+                <span className="ml-2 inline-block text-xs text-muted-foreground">
+                  {getContractDirectionLabel(contract.contractDirection)} · {getContractLanguageModeLabel(contract.languageMode)}
+                </span>
+              </summary>
+              <div className="grid gap-4 border-t p-4 sm:grid-cols-3">
+              <div className="space-y-1.5">
+                <p className="text-sm text-muted-foreground">Loại hợp đồng</p>
+                <p className="text-sm font-medium">{getContractTypeLabel(contract.contractType)}</p>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm text-muted-foreground" htmlFor="draft-contract-direction">Chiều giao dịch</label>
+                {canEditDocumentSettings ? (
+                  <Select value={String(contract.contractDirection)} onValueChange={(value) => handleRootChange("contractDirection", Number(value) as ContractDirection)}>
+                    <SelectTrigger id="draft-contract-direction" className="w-full bg-background"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={String(ContractDirection.Sale)}>Bán</SelectItem>
+                      <SelectItem value={String(ContractDirection.Purchase)}>Mua</SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : <p className="text-sm font-medium">{getContractDirectionLabel(contract.contractDirection)}</p>}
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm text-muted-foreground" htmlFor="draft-contract-language">Ngôn ngữ</label>
+                {canEditDocumentSettings ? (
+                  <Select value={String(contract.languageMode)} onValueChange={(value) => {
+                    const mode = Number(value) as ContractLanguageMode;
+                    if (mode === ContractLanguageMode.Vietnamese && (
+                      contract.currentVersion.terms.some((term) => term.bilingualContentMode === 2)
+                      || contract.currentVersion.appendices.some((appendix) =>
+                        appendix.terms.some((term) => term.bilingualContentMode === 2))
+                    )) {
+                      toast.error("Hãy chuyển các điều khoản và phụ lục đang gộp song ngữ sang nội dung tách riêng trước khi đổi ngôn ngữ.");
+                      return;
+                    }
+                    handleRootChange("languageMode", mode);
+                  }}>
+                    <SelectTrigger id="draft-contract-language" className="w-full bg-background"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={String(ContractLanguageMode.Vietnamese)}>Tiếng Việt</SelectItem>
+                      <SelectItem value={String(ContractLanguageMode.Bilingual)}>Song ngữ</SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : <p className="text-sm font-medium">{getContractLanguageModeLabel(contract.languageMode)}</p>}
+              </div>
+              {!canEditDocumentSettings && (
+                <p className="text-xs text-muted-foreground sm:col-span-3">Chiều giao dịch và ngôn ngữ được giữ theo cấu hình của hồ sơ này.</p>
+              )}
+              </div>
+            </details>
+          )}
           {/* SỬA TÊN HỢP ĐỒNG */}
           <div>
-            <p className="text-sm font-semibold mb-1 text-muted-foreground">
+            <label htmlFor={isEditable ? "overview-contract-name" : undefined} className="mb-1 block text-sm font-semibold text-muted-foreground">
               Tên hợp đồng
-            </p>
+            </label>
             {isEditable ? (
               <Input
+                id="overview-contract-name"
+                maxLength={1000}
                 value={contract.contractName}
                 onChange={(e) =>
                   handleRootChange("contractName", e.target.value)
@@ -428,11 +528,13 @@ export function ContractOverview({
 
           {contract.languageMode === ContractLanguageMode.Bilingual && (
             <div>
-              <p className="mb-1 text-sm font-semibold text-muted-foreground">
+              <label htmlFor={isEditable ? "overview-contract-name-en" : undefined} className="mb-1 block text-sm font-semibold text-muted-foreground">
                 Tên hợp đồng tiếng Anh
-              </p>
+              </label>
               {isEditable ? (
                 <Input
+                  id="overview-contract-name-en"
+                  maxLength={1000}
                   value={contract.contractNameEn || ""}
                   onChange={(e) =>
                     handleRootChange("contractNameEn", e.target.value)
@@ -450,35 +552,32 @@ export function ContractOverview({
           <div className="grid gap-4 sm:grid-cols-2">
             {isEditable ? (
               <div className="rounded-xl border bg-muted/20 p-4">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2 font-semibold">
+                <label htmlFor="overview-counterparty" className="mb-2 flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                   <Users className="size-4" />{" "}
                   {getContractCounterpartyLabel(contract.contractDirection)}
-                </div>
-                <Select
+                </label>
+                {isDraftEditable ? <ContractLookupPicker
+                  id="overview-counterparty"
+                  label={getContractCounterpartyLabel(contract.contractDirection)}
                   value={String(contract.customer?.customerId || "")}
-                  onValueChange={(val) => {
-                    const found = customers.find(
-                      (c) => c.customerId === Number(val),
-                    );
-                    if (found) {
-                      setContract((prev) =>
-                        prev
-                          ? {
-                              ...prev,
-                              customer: {
-                                ...prev.customer,
-                                customerId: found.customerId,
-                                customerCode: found.customerCode,
-                                customerFullName: found.customerFullName,
-                                customerCompany: found.customerCompany,
-                              },
-                            }
-                          : prev,
-                      );
-                    }
-                  }}
+                  selectedLabel={contract.customer?.customerCompany || contract.customer?.customerFullName || undefined}
+                  search={customerQuery}
+                  searchPlaceholder="Tìm theo tên, mã hoặc mã số thuế…"
+                  onSearchChange={setCustomerQuery}
+                  onSelect={handleCustomerChange}
+                  loading={customerLoading}
+                  error={customerError}
+                  options={customers.flatMap((customer) => {
+                    const label = customer.customerCompany || customer.customerFullName || customer.customerCode || "Chưa có tên";
+                    const details = [customer.customerCode, customer.customerTaxCode && `MST ${customer.customerTaxCode}`].filter(Boolean).join(" · ");
+                    const haystack = `${label} ${customer.customerFullName ?? ""} ${details}`.toLocaleLowerCase("vi");
+                    return haystack.includes(customerQuery.trim().toLocaleLowerCase("vi")) ? [{ id: String(customer.customerId), label, detail: details }] : [];
+                  })}
+                /> : <Select
+                  value={String(contract.customer?.customerId || "")}
+                  onValueChange={handleCustomerChange}
                 >
-                  <SelectTrigger className="w-full h-9 bg-background">
+                  <SelectTrigger id="overview-counterparty" className="w-full h-9 bg-background">
                     <SelectValue
                       placeholder={`Chọn ${getContractCounterpartyLabel(contract.contractDirection).toLocaleLowerCase()}`}
                     />
@@ -493,7 +592,7 @@ export function ContractOverview({
                       </SelectItem>
                     ))}
                   </SelectContent>
-                </Select>
+                </Select>}
               </div>
             ) : (
               <InfoCard
@@ -513,6 +612,8 @@ export function ContractOverview({
               </div>
               {isEditable ? (
                 <DateRangeFilter
+                  compact
+                  confirmOnDaySelect
                   dateRange={{
                     from: contract.effectiveDate
                       ? new Date(contract.effectiveDate)
@@ -550,8 +651,11 @@ export function ContractOverview({
               setItemsSearchQuery("");
             }}
           >
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="font-semibold">Sản phẩm / Dịch vụ</h4>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h4 className="flex items-center gap-2 font-semibold"><Package aria-hidden className="size-4 text-primary" /> Sản phẩm và dịch vụ</h4>
+                {isDraftEditable && <p className="mt-0.5 text-xs text-muted-foreground">Chỉnh từng hạng mục mà không thay đổi danh mục gốc.</p>}
+              </div>
               {isEditable && (
                 <Dialog
                   open={isCatalogOpen}
@@ -561,9 +665,9 @@ export function ContractOverview({
                   }}
                 >
                   <DialogTrigger asChild>
-                    <Button variant="outline" size="sm">
-                      <Plus className="size-4 mr-2" />
-                      Thêm SP/DV
+                    <Button variant={isDraftEditable ? "default" : "outline"} size="sm">
+                      <Plus className="size-4" />
+                      Thêm hạng mục
                     </Button>
                   </DialogTrigger>
                   <DialogContent className="max-w-8xl max-h-[80vh] flex flex-col">
@@ -747,16 +851,18 @@ export function ContractOverview({
             </TabsList>
             <TabsContent value={itemsTab}>
               {/* Thanh tìm kiếm Items */}
-              {(contract.currentVersion?.items?.length || 0) > 0 && (
+              {((contract.currentVersion?.items?.length || 0) > (isDraftEditable ? 1 : 0) || itemsSearchQuery) && (
                 <div className="relative mb-3">
                   <Input
                     type="text"
                     placeholder="Tìm kiếm sản phẩm / dịch vụ..."
                     className="bg-background w-full"
+                    aria-label="Tìm hạng mục trong hợp đồng"
                     value={itemsSearchQuery}
                     onChange={(e) => {
                       setItemsSearchQuery(e.target.value);
                       setItemsCurrentPage(1);
+                      setExpandedItems({});
                     }}
                   />
                 </div>
@@ -775,6 +881,9 @@ export function ContractOverview({
                   </p>
                 )}
                 {paginatedItems.map((item) => {
+                  const expanded = !isDraftEditable || (expandedItems[item.contractItemId] ?? contract.currentVersion.items.length === 1);
+                  const missingInfo = !item.itemName.trim() || !item.unitName?.trim() ||
+                    (isBilingual && (!item.itemNameEn?.trim() || !item.unitNameEn?.trim()));
                   const amounts = isEditable
                     ? calculateContractItemAmounts(item, contract.currencyCode)
                     : {
@@ -787,37 +896,92 @@ export function ContractOverview({
                   return (
                     <div
                       key={item.contractItemId}
-                      className="overflow-hidden rounded-xl border bg-background"
+                      className={cn("overflow-hidden rounded-xl border bg-background", isDraftEditable && missingInfo && "border-amber-500/55")}
                     >
-                      <div className="flex items-start justify-between gap-3 border-b bg-muted/20 p-4">
-                        <div className="min-w-0">
-                          <p className="font-semibold">{item.itemName}</p>
-                          <p className="mt-1 text-xs text-muted-foreground">
+                      <div className={cn("flex items-start justify-between gap-2 bg-muted/20 p-3 sm:px-4", expanded && "border-b")}>
+                        <div className="min-w-0 flex-1">
+                          <p className="break-words font-semibold">{item.itemName || "Hạng mục chưa có tên"}</p>
+                          <p className="mt-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
                             {item.itemCode ||
                               (item.itemType === ContractItemType.Product
                                 ? "Sản phẩm"
                                 : "Dịch vụ")}
+                            {isDraftEditable && !expanded && <span>{item.quantity} {item.unitName} · <strong className="text-primary">{formatCurrency(amounts.lineTotal, contract.currencyCode)}</strong></span>}
                           </p>
+                          {isDraftEditable && missingInfo && <Badge variant="outline" className="mt-1 border-amber-500/50 text-amber-800 dark:text-amber-300">Thiếu thông tin</Badge>}
                         </div>
+                        {isDraftEditable && <Button type="button" variant="outline" size="sm"
+                          aria-expanded={expanded} aria-controls={`draft-item-fields-${item.contractItemId}`}
+                          aria-label={`${expanded ? "Thu gọn" : "Sửa"} ${item.itemName || "hạng mục"}`}
+                          onClick={() => setExpandedItems((previous) => ({ ...previous, [item.contractItemId]: !expanded }))}>
+                          <span className="hidden sm:inline">{expanded ? "Thu gọn" : "Sửa"}</span>
+                          <ChevronDown className={cn("size-4", expanded && "rotate-180")} />
+                        </Button>}
                         {isEditable && (
                           <Button
+                            type="button"
                             variant="ghost"
                             size="icon"
+                            title="Bỏ hạng mục khỏi hợp đồng"
                             className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
                             onClick={() =>
                               handleRemoveItem(item.contractItemId)
                             }
                           >
                             <Trash2 className="size-4" />
-                            <span className="sr-only">Xóa sản phẩm</span>
+                            <span className="sr-only">Bỏ {item.itemName || "hạng mục"} khỏi hợp đồng</span>
                           </Button>
                         )}
                       </div>
 
+                      <div id={`draft-item-fields-${item.contractItemId}`} hidden={!expanded}>
                       {isEditable ? (
                         <>
+                          {isDraftEditable && (
+                            <div className="space-y-3 border-b px-4 py-4">
+                              <h5 className="text-sm font-semibold">Thông tin hạng mục</h5>
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+                                  <span>Tên sản phẩm / dịch vụ</span>
+                                  <Input maxLength={500} value={item.itemName} onChange={(event) => handleItemChange(item.contractItemId, "itemName", event.target.value)} />
+                                </label>
+                                <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+                                  <span>Đơn vị tính</span>
+                                  <Input maxLength={100} value={item.unitName ?? ""} onChange={(event) => handleItemPatch(item.contractItemId, { unitName: event.target.value, overrideCatalogUnit: true })} />
+                                </label>
+                                {isBilingual && (
+                                  <>
+                                    <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+                                      <span>Tên tiếng Anh</span>
+                                      <Input maxLength={500} value={item.itemNameEn ?? ""} onChange={(event) => handleItemChange(item.contractItemId, "itemNameEn", event.target.value)} />
+                                    </label>
+                                    <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+                                      <span>Đơn vị tính tiếng Anh</span>
+                                      <Input maxLength={100} value={item.unitNameEn ?? ""} onChange={(event) => handleItemPatch(item.contractItemId, { unitNameEn: event.target.value, overrideCatalogUnit: true })} />
+                                    </label>
+                                  </>
+                                )}
+                              </div>
+                              <details className="rounded-lg border bg-muted/15 px-3 py-2">
+                                <summary className="cursor-pointer text-sm font-medium">Mô tả sản phẩm / dịch vụ</summary>
+                                <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                                  <label className={`space-y-1.5 text-xs font-medium text-muted-foreground ${isBilingual ? "" : "sm:col-span-2"}`}>
+                                    <span>{isBilingual ? "Mô tả tiếng Việt" : "Mô tả"}</span>
+                                    <Textarea value={item.itemDescription ?? ""} onChange={(event) => handleItemChange(item.contractItemId, "itemDescription", event.target.value)} />
+                                  </label>
+                                  {isBilingual && (
+                                    <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+                                      <span>Mô tả tiếng Anh</span>
+                                      <Textarea value={item.itemDescriptionEn ?? ""} onChange={(event) => handleItemChange(item.contractItemId, "itemDescriptionEn", event.target.value)} />
+                                    </label>
+                                  )}
+                                </div>
+                              </details>
+                            </div>
+                          )}
                           <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4">
-                            <div className="space-y-1.5">
+                            {isDraftEditable && <h5 className="text-sm font-semibold sm:col-span-2 xl:col-span-4">Số lượng và giá</h5>}
+                            {!isDraftEditable && <div className="space-y-1.5">
                               <span className="text-xs font-medium text-muted-foreground">
                                 Đơn vị đã lấy từ danh mục
                               </span>
@@ -831,8 +995,8 @@ export function ContractOverview({
                                     "Chưa có đơn vị tiếng Anh"}
                                 </p>
                               )}
-                            </div>
-                            {contract.languageMode ===
+                            </div>}
+                            {!isDraftEditable && contract.languageMode ===
                               ContractLanguageMode.Bilingual && (
                               <div className="space-y-1.5 sm:col-span-2 xl:col-span-5">
                                 <span className="text-xs font-medium text-muted-foreground">
@@ -1131,6 +1295,7 @@ export function ContractOverview({
                           </p>
                         </div>
                       </div>
+                      </div>
                     </div>
                   );
                 })}
@@ -1170,7 +1335,7 @@ export function ContractOverview({
         </CardContent>
       </Card>
 
-      <div className="space-y-6">
+      <div className="min-w-0 space-y-6 xl:sticky xl:top-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
             <CardTitle className="text-base">Giá trị hợp đồng</CardTitle>

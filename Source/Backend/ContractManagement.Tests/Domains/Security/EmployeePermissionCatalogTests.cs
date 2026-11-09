@@ -9,12 +9,12 @@ public sealed class EmployeePermissionCatalogTests
     [
         [EmployeeType.Sale, Expected(RbacPermissions.CustomerManage)],
         [EmployeeType.Marketing, Expected(RbacPermissions.CustomerManage)],
-        [EmployeeType.AdminOfficer, ExpectedAdministration(RbacPermissions.ContractApprovalReview).Where(x =>
+        [EmployeeType.AdminOfficer, ExpectedAdministration(RbacPermissions.ContractApprovalReview, RbacPermissions.ContractTextCorrect).Where(x =>
             x != RbacPermissions.ContractSigningManage).ToArray()],
         [EmployeeType.Technical, Expected(RbacPermissions.ContractExecutionRead)],
         [EmployeeType.Accountant, ExpectedAdministration().Where(x =>
             x != RbacPermissions.ContractSigningManage).ToArray()],
-        [EmployeeType.Manager, ExpectedAdministration(RbacPermissions.ContractApprovalDecide)]
+        [EmployeeType.Manager, ExpectedAdministration(RbacPermissions.ContractApprovalDecide, RbacPermissions.ContractTextCorrect)]
     ];
 
     [Theory]

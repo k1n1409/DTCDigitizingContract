@@ -52,7 +52,7 @@ public sealed class EditorDocxPreservationTests
         var tenant = new CurrentTenant(); tenant.Set(new ResolvedTenant(tenantId, "test", "Test", TenantDatabaseMode.Dedicated, "unused"));
         var http = new DefaultHttpContext { Session = new TestSession() }; http.Session.SetInt32("EmployeeId", actor);
         var context = new ControllerContext { HttpContext = http };
-        return (new(new NoPdf(), db, tenant) { ControllerContext = context }, new(db, tenant) { ControllerContext = context });
+        return (new(new NoPdf(), db, tenant) { ControllerContext = context }, new(db, tenant, new NoPdf()) { ControllerContext = context });
     }
     private static string Encode(ContractTermRichTextDocument model) => ContractTermRichText.Prefix + JsonSerializer.Serialize(model, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
     private static async Task<ContractTermRichTextDocument> Import(ContractDocumentEditorController editor, byte[] bytes)
@@ -143,6 +143,58 @@ public sealed class EditorDocxPreservationTests
         Assert.IsType<BadRequestObjectResult>(await owner.Drafts.Update(id, new() { Title = "Losing source", ExpectedRevision = 1 }, default));
         var asset = await db.Set<ContractEditorSourceAsset>().SingleAsync(); var corrupted = asset.Docx.ToArray(); corrupted[0] ^= 1; asset.Docx = corrupted; db.Entry(asset).Property(x => x.Docx).IsModified = true; await db.SaveChangesAsync();
         Assert.IsType<ConflictObjectResult>(await owner.Editor.Export("docx", new() { Content = Encode(model), Bindings = new() { ["CONTRACT_CODE"] = "HD" } }, default));
+    }
+
+    [Fact]
+    public async Task ExplicitLayout_ChangesPageButRetainsHeaderFooterAndProtectedBlocks()
+    {
+        await using var db = Db(); var api = Api(db); var model = await Import(api.Editor, Fixture());
+        model.Layout = new() { Paper = "A5", Orientation = "portrait", MarginLeft = 15, LineSpacing = 2 };
+        var result = Assert.IsType<FileContentResult>(await api.Editor.Export("docx", new() { Content = Encode(model), Bindings = new() { ["CONTRACT_CODE"] = "HD-01" } }, default));
+        using var stream = new MemoryStream(result.FileContents); using var doc = WordprocessingDocument.Open(stream, false);
+        Assert.Equal(8391U, doc.MainDocumentPart!.Document.Body!.GetFirstChild<SectionProperties>()!.GetFirstChild<PageSize>()!.Width!.Value);
+        Assert.Contains("HD-01", doc.MainDocumentPart.HeaderParts.Single().Header!.InnerText);
+        Assert.Contains("CHÂN TRANG", doc.MainDocumentPart.FooterParts.Single().Footer!.InnerText);
+        Assert.Single(doc.MainDocumentPart.ImageParts);
+        Assert.True(doc.MainDocumentPart.Document.Descendants<Table>().Any(t => t.Descendants<Table>().Any()));
+        Assert.Equal("480", doc.MainDocumentPart.Document.Body.Elements<Paragraph>().First().ParagraphProperties!.SpacingBetweenLines!.Line!.Value);
+    }
+
+    [Fact]
+    public async Task CreateDraftHandoff_RequiresOwnerLatestRevisionReviewAndMatchingCustomer()
+    {
+        await using var db = Db(); var api = Api(db);
+        var content = Encode(new() { Blocks = [new() { Type = "paragraph", Runs = [new() { Text = "Khách hàng: {{CUSTOMER_NAME}}" }] }] });
+        await api.Drafts.Create(new() { Title = "Tài liệu gốc", Content = content, Bindings = new() { ["SOURCE_CUSTOMER_ID"] = "7", ["CUSTOMER_NAME"] = "Khách đúng" } }, default);
+        var id = (await db.Set<ContractEditorDocument>().SingleAsync()).Id;
+        var service = System.Reflection.DispatchProxy.Create<ContractManagement.Domains.Interfaces.Contract.IContractService, CreateProxy>();
+        var proxy = (CreateProxy)(object)service;
+        var request = new ContractEditorDraftsController.CreateDraftFromEditorRequest { Revision = 1, Reviewed = false, Contract = new() { CustomerId = 7 } };
+        Assert.IsType<BadRequestObjectResult>(await api.Drafts.CreateContract(id, request, service, default));
+        request.Reviewed = true; request.Revision = 2;
+        Assert.IsType<ConflictObjectResult>(await api.Drafts.CreateContract(id, request, service, default));
+        request.Revision = 1;
+        Assert.IsType<NotFoundResult>(await Api(db, 20).Drafts.CreateContract(id, request, service, default));
+        Assert.IsType<NotFoundResult>(await Api(db, 10, 2).Drafts.CreateContract(id, request, service, default));
+        request.Contract.CustomerId = 8;
+        Assert.IsType<BadRequestObjectResult>(await api.Drafts.CreateContract(id, request, service, default));
+        Assert.Null(proxy.Request);
+        request.Contract.CustomerId = 7;
+        Assert.IsType<CreatedResult>(await api.Drafts.CreateContract(id, request, service, default));
+        Assert.Equal(id, proxy.Request!.EditorSourceDocumentId); Assert.Equal(1, proxy.Request.EditorSourceRevision);
+        using var stream = new MemoryStream(proxy.Request.EditorSourceDocx!); using var word = WordprocessingDocument.Open(stream, false);
+        Assert.Contains("Khách đúng", word.MainDocumentPart!.Document.InnerText); Assert.DoesNotContain("{{", word.MainDocumentPart.Document.InnerText);
+    }
+
+    public class CreateProxy : System.Reflection.DispatchProxy
+    {
+        public ContractManagement.API.Domains.DTOs.Requests.Contract.CreateContractRequest? Request;
+        protected override object? Invoke(System.Reflection.MethodInfo? method, object?[]? args)
+        {
+            if (method?.Name != "CreateAsync") throw new NotSupportedException();
+            Request = (ContractManagement.API.Domains.DTOs.Requests.Contract.CreateContractRequest)args![0]!;
+            return Task.FromResult(new ContractManagement.API.Domains.DTOs.Responses.Contract.CreateContractResponse { ContractId = 99 });
+        }
     }
 
     private sealed class NoPdf : IContractTemplatePdfRenderer { public Task<byte[]> ConvertPreviewToPdfAsync(byte[] bytes, CancellationToken ct = default) => throw new ContractTemplatePdfRenderingException("Unavailable", "No converter"); }

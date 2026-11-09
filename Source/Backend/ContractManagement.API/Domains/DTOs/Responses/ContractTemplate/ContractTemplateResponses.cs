@@ -127,6 +127,7 @@ public sealed class ContractTemplateVersionSummaryResponse
 
 public sealed class ContractTemplateVersionDetailResponse
 {
+    public bool HasAdministrativeTextEdits { get; set; }
     public bool RequiresSections { get; set; }
     public ContractDirection ContractDirection { get; set; }
 

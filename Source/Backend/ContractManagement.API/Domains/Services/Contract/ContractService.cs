@@ -47,6 +47,7 @@ namespace ContractManagement.Domains.Services.Contract
         private readonly IContractSubmissionArtifactRenderer?
             _submissionArtifactRenderer;
         private readonly IPrivateFileStorage? _privateFileStorage;
+        private readonly IContractEditorBindingFingerprint? _editorBindingFingerprint;
         private IContractPlaceholderValueService? _placeholderValueService;
         private IContractPaymentDueDateService _paymentDueDates =
             new ContractPaymentDueDateService();
@@ -58,11 +59,13 @@ namespace ContractManagement.Domains.Services.Contract
         public ContractService(
             DbDtctechContext dbContext,
             IContractAuditWriter contractAuditWriter,
-            IContractDiscussionRealtimePublisher? discussionRealtime = null)
+            IContractDiscussionRealtimePublisher? discussionRealtime = null,
+            IContractEditorBindingFingerprint? editorBindingFingerprint = null)
         {
             _dbContext = dbContext;
             _contractAuditWriter = contractAuditWriter;
             _discussionRealtime = discussionRealtime;
+            _editorBindingFingerprint = editorBindingFingerprint;
         }
 
         public ContractService(
@@ -89,7 +92,8 @@ namespace ContractManagement.Domains.Services.Contract
             IContractPlaceholderValueService? placeholderValueService = null,
             IContractPaymentDueDateService? paymentDueDates = null,
             ContractNotificationProducer? notifications = null,
-            IContractDiscussionRealtimePublisher? discussionRealtime = null)
+            IContractDiscussionRealtimePublisher? discussionRealtime = null,
+            IContractEditorBindingFingerprint? editorBindingFingerprint = null)
             : this(
                 dbContext,
                 contractAuditWriter,
@@ -102,6 +106,7 @@ namespace ContractManagement.Domains.Services.Contract
             _privateFileStorage = privateFileStorage;
             _notifications = notifications;
             _discussionRealtime = discussionRealtime;
+            _editorBindingFingerprint = editorBindingFingerprint;
         }
 
         public ContractService(
@@ -130,6 +135,7 @@ namespace ContractManagement.Domains.Services.Contract
             bool canReadTenant = false,
             bool canReadExecution = false)
         {
+            ContractWorkFilterPolicy.Validate(filter);
             if (employeeId <= 0)
             {
                 throw new UnauthorizedAccessException(
@@ -228,6 +234,14 @@ namespace ContractManagement.Domains.Services.Contract
                     x.Contract.Status == (byte)filter.Status.Value);
             }
 
+            if (filter.Outcome.HasValue)
+            {
+                if (!Enum.IsDefined(filter.Outcome.Value)) throw new ArgumentException("Kết quả hợp đồng không hợp lệ.");
+                var outcome = (byte)filter.Outcome.Value;
+                query = query.Where(x => (x.Contract.Outcome == 0 && x.Contract.Status == (byte)ContractStatus.Completed
+                    ? (byte)ContractOutcome.Succeeded : x.Contract.Outcome) == outcome);
+            }
+
             if (filter.ContractDirection.HasValue)
             {
                 ContractManagement.Domains.Policies.Contract.ContractPartyRoleResolver.Validate(filter.ContractDirection.Value);
@@ -247,6 +261,34 @@ namespace ContractManagement.Domains.Services.Contract
                     x.Contract.CustomerId == filter.CustomerId.Value);
             }
 
+            // Work filters are evaluated in SQL, before counting/pagination.
+            if (filter.ContractId.HasValue) query = query.Where(x => x.Contract.ContractId == filter.ContractId.Value);
+            if (filter.OnlyMine) query = query.Where(x => x.Contract.EmployeeId == employeeId);
+            if (filter.EmployeeId.HasValue) query = query.Where(x => x.Contract.EmployeeId == filter.EmployeeId.Value);
+            if (filter.DepartmentId.HasValue) query = query.Where(x => x.Employee.DepartmentId == filter.DepartmentId.Value);
+            if (filter.MinAmount.HasValue) query = query.Where(x => x.Contract.TotalAmount >= filter.MinAmount.Value);
+            if (filter.MaxAmount.HasValue) query = query.Where(x => x.Contract.TotalAmount <= filter.MaxAmount.Value);
+            if (filter.CurrencyCode is not null) query = query.Where(x => x.Contract.CurrencyCode == filter.CurrencyCode);
+            DateTime? expiryStart = filter.ExpireFrom?.Date;
+            DateTime? expiryEnd = filter.ExpireTo?.Date.AddDays(1);
+            if (filter.ExpiringInDays.HasValue)
+            {
+                expiryStart = DateTime.UtcNow.AddHours(7).Date;
+                expiryEnd = expiryStart.Value.AddDays(filter.ExpiringInDays.Value + 1);
+            }
+            if (expiryStart.HasValue) query = query.Where(x => x.Contract.ExpireDate.HasValue && x.Contract.ExpireDate.Value >= expiryStart.Value);
+            if (expiryEnd.HasValue) query = query.Where(x => x.Contract.ExpireDate.HasValue && x.Contract.ExpireDate.Value < expiryEnd.Value);
+            if (filter.PaymentState.HasValue)
+            {
+                var payments = PaymentFilterRows();
+                payments = filter.PaymentState.Value switch {
+                    ContractPaymentFilterState.Unpaid => payments.Where(p => p.Paid <= 0),
+                    ContractPaymentFilterState.Partial => payments.Where(p => p.Paid > 0 && p.Paid < p.Total),
+                    ContractPaymentFilterState.Paid => payments.Where(p => p.Paid > 0 && p.Paid == p.Total),
+                    _ => payments.Where(p => p.Paid > p.Total)
+                };
+                query = query.Where(x => payments.Any(p => p.VersionId == x.Contract.CurrentVersionId));
+            }
             var totalCount = await query.CountAsync();
 
             var contracts = await query
@@ -264,6 +306,8 @@ namespace ContractManagement.Domains.Services.Contract
                     ContractDirection = (ContractDirection)x.Contract.ContractDirection,
                     Status =
                         (ContractStatus)x.Contract.Status,
+                    Outcome = x.Contract.Outcome == 0 && x.Contract.Status == (byte)ContractStatus.Completed
+                        ? ContractOutcome.Succeeded : (ContractOutcome)x.Contract.Outcome,
 
                     CustomerId = x.Customer.CustomerId,
                     CustomerCode = x.Customer.CustomerCode,
@@ -431,6 +475,22 @@ namespace ContractManagement.Domains.Services.Contract
         {
             // Kiểm tra dữ liệu đầu vào không cần truy cập database.
             ValidateRequest(request, createdEmployeeId);
+            var wordOnly = request.TemplateVersionId == 0;
+            if (request.TemplateVersionId < 0 || (wordOnly && request.EditorSourceDocx is not { Length: > 0 }))
+                throw new ArgumentException("Chọn mẫu đã phát hành hoặc tạo từ bản Word đã rà soát.");
+            if (wordOnly && request.Terms is not { Count: > 0 })
+                throw new ArgumentException("Hãy nhập ít nhất một điều khoản khi tạo từ Word.");
+            if (request.EditorSourceDocx is not null || request.EditorSourceDocumentId is not null
+                || request.EditorSourceRevision is not null || request.EditorSourceTitle is not null)
+            {
+                if (request.EditorSourceDocx is not { Length: > 0 and <= 10 * 1024 * 1024 }
+                    || request.EditorSourceDocumentId is null || request.EditorSourceDocumentId == Guid.Empty
+                    || request.EditorSourceRevision is not > 0 || string.IsNullOrWhiteSpace(request.EditorSourceTitle)
+                    || request.EditorSourceTitle.Length > 100 || request.ContractType != ContractType.SoftwareSupply)
+                    throw new ArgumentException("Tài liệu chính thức cần có đầy đủ bản Word, mã tài liệu, revision và tên hợp lệ.");
+                if (_editorBindingFingerprint is null && _submissionArtifactRenderer is not IContractEditorBindingFingerprint)
+                    throw new InvalidOperationException("Chưa cấu hình bộ ghim tài liệu chính thức. Không tạo Draft chỉ có bản tham chiếu.");
+            }
 
             /*
              * DbContext đang bật EnableRetryOnFailure().
@@ -462,7 +522,7 @@ namespace ContractManagement.Domains.Services.Contract
                     ContractManagement.Domains.Policies.Contract.ContractPartyRoleResolver.Validate(request.ContractDirection);
                     var customerAudit =
                         await ValidateCustomerAsync(request.CustomerId);
-                    await ValidateTemplateAsync(request);
+                    if (!wordOnly) await ValidateTemplateAsync(request);
                     await ValidateParentContractAsync(
                         request,
                         createdEmployeeId);
@@ -583,7 +643,7 @@ namespace ContractManagement.Domains.Services.Contract
                         throw new ArgumentException(
                             "Vui lòng nhập ngày bắt đầu tính hạn cho tất cả đợt dùng Lịch thủ công.");
 
-                    if (templateTerms.Count == 0)
+                    if (!wordOnly && templateTerms.Count == 0)
                     {
                         throw new InvalidOperationException(
                             "Template version chưa có điều khoản để tạo hợp đồng.");
@@ -603,6 +663,9 @@ namespace ContractManagement.Domains.Services.Contract
                      */
                     var contract = new TblContract
                     {
+                        EditorSourceDocumentId = request.EditorSourceDocumentId,
+                        EditorSourceRevision = request.EditorSourceRevision,
+                        EditorSourceTitle = request.EditorSourceTitle,
                         CustomerId = request.CustomerId,
 
                         EmployeeId = responsibleEmployeeId,
@@ -656,6 +719,7 @@ namespace ContractManagement.Domains.Services.Contract
                     {
                         ContractId = contract.ContractId,
                         VersionNo = 1,
+                        DocumentMode = request.EditorSourceDocx is not null ? (byte)1 : (byte)0,
                         SourceVersionId = null,
                         TemplateVersionId = request.TemplateVersionId,
                         ChangeNote = "Khởi tạo hợp đồng.",
@@ -943,6 +1007,9 @@ namespace ContractManagement.Domains.Services.Contract
                         currencyCode,
                         totals);
 
+                    if (request.EditorSourceDocx is { Length: > 0 } editorDocx)
+                        _dbContext.Add(new ContractEditorSourceSnapshot { ContractId = contract.ContractId, Docx = editorDocx });
+
                     var createdItemsAudit = BuildAuditSummary(
                         contractItems.Select(item => BuildItemAuditEntry(
                             null,
@@ -1037,7 +1104,30 @@ namespace ContractManagement.Domains.Services.Contract
                             "Hợp đồng mới đã được tạo và phân công", "overview", now);
                     await _dbContext.SaveChangesAsync();
 
-                    // Chỉ commit khi toàn bộ Contract, Version, Item và Term thành công.
+                    if (request.EditorSourceDocx is { Length: > 0 } officialDocx)
+                    {
+                        // All aggregate rows now exist inside this transaction. Capture the
+                        // exact same fingerprint the official renderer checks at submission.
+                        var capture = _editorBindingFingerprint ?? (IContractEditorBindingFingerprint)_submissionArtifactRenderer!;
+                        var businessHash = await capture.CaptureEditorBindingHashAsync(contract.ContractId, responsibleEmployeeId);
+                        var docxHash = Convert.ToHexString(SHA256.HashData(officialDocx));
+                        contractVersion.DocumentMode = 1;
+                        _dbContext.Add(new ContractVersionEditorDocument {
+                            ContractId = contract.ContractId, VersionId = contractVersion.VersionId,
+                            EditorDocumentId = request.EditorSourceDocumentId!.Value,
+                            EditorRevision = request.EditorSourceRevision!.Value, Title = request.EditorSourceTitle!,
+                            Docx = officialDocx.ToArray(), DocxHash = docxHash, BusinessHash = businessHash,
+                            BoundByEmployeeId = createdEmployeeId, BoundAtUtc = now
+                        });
+                        _contractAuditWriter.StageEmployeeAudits([new EmployeeContractAuditWriteRequest(
+                            contract.ContractId, contractVersion.VersionId, createdEmployeeId,
+                            ContractAuditActionTypes.DraftUpdated, ContractAuditResults.Succeeded, now,
+                            Reason: $"Tự ghim tài liệu khi tạo Draft; revision {request.EditorSourceRevision}; SHA-256 {docxHash}",
+                            SubjectType: ContractAuditSubjectTypes.ContractVersion, SubjectId: contractVersion.VersionId)]);
+                        await _dbContext.SaveChangesAsync();
+                    }
+
+                    // Commit the aggregate and its official document as one atomic unit.
                     await transaction.CommitAsync();
 
                     return new CreateContractResponse
@@ -1608,8 +1698,16 @@ namespace ContractManagement.Domains.Services.Contract
                 comments.Count(comment =>
                     comment.State == ContractNegotiationCommentState.Open));
 
+            var hasAdministrativeTextEdits = await _dbContext.Set<AdministrativeTextEdit>().AnyAsync(x => x.Target == "contract" && x.ParentId == contract.ContractId && x.VersionId == version.VersionId);
             return new ContractDetailResponse
             {
+                EditorSourceDocumentId = contract.EditorSourceDocumentId,
+                HasAdministrativeTextEdits = hasAdministrativeTextEdits,
+                Outcome = ContractOutcomePolicy.Effective(contract),
+                OutcomeReason = contract.OutcomeReason,
+                OutcomeUpdatedAtUtc = contract.OutcomeUpdatedAtUtc,
+                EditorSourceRevision = contract.EditorSourceRevision,
+                EditorSourceTitle = contract.EditorSourceTitle,
                 ContractId = contract.ContractId,
                 ContractCode = contract.ContractCode,
                 ContractName = contract.ContractName,
@@ -1674,6 +1772,7 @@ namespace ContractManagement.Domains.Services.Contract
 
                 CurrentVersion = new ContractVersionDetailResponse
                 {
+                    HasAdministrativeTextEdits = hasAdministrativeTextEdits,
                     VersionId = version.VersionId,
                     VersionNo = version.VersionNo,
                     SourceVersionId = version.SourceVersionId,
@@ -1818,9 +1917,21 @@ namespace ContractManagement.Domains.Services.Contract
                                 "Không tìm thấy hợp đồng.");
                         }
 
-                        if (request.ContractDirection.HasValue && (byte)request.ContractDirection.Value != contract.ContractDirection)
-                            throw new ArgumentException("Không được đổi chiều Mua/Bán sau khi tạo hợp đồng.");
                         var currentStatus = (ContractStatus)contract.Status;
+                        var previousDirection = (ContractDirection)contract.ContractDirection;
+                        var direction = request.ContractDirection ?? previousDirection;
+                        var language = request.LanguageMode ?? (ContractLanguageMode)contract.LanguageMode;
+                        var changesDirection = (byte)direction != contract.ContractDirection;
+                        var changesLanguage = (byte)language != contract.LanguageMode;
+                        var independentWordDraft = currentStatus == ContractStatus.Draft && contract.TemplateVersionId == 0
+                            && contract.EditorSourceDocumentId.HasValue && !contract.ParentContractId.HasValue;
+                        if (changesDirection && !independentWordDraft)
+                            throw new ArgumentException("Không được đổi chiều Mua/Bán sau khi tạo hợp đồng, trừ bản nháp tạo trực tiếp từ Word không dùng khung.");
+                        if (changesLanguage && !independentWordDraft)
+                            throw new ArgumentException("Chỉ bản nháp tạo trực tiếp từ Word không dùng khung mới được đổi ngôn ngữ.");
+                        if (changesDirection) ContractManagement.Domains.Policies.Contract.ContractPartyRoleResolver.Validate(direction);
+                        if (changesLanguage && !Enum.IsDefined(language))
+                            throw new ArgumentException("Ngôn ngữ hợp đồng không hợp lệ.");
 
                         if (!ContractLifecyclePolicy.CanEditContent(currentStatus))
                         {
@@ -1861,6 +1972,8 @@ namespace ContractManagement.Domains.Services.Contract
                             throw new InvalidOperationException(
                                 "Version đã bị khóa, không thể cập nhật trực tiếp.");
                         }
+                        if ((changesDirection || changesLanguage) && (version.TemplateVersionId != 0 || version.DocumentMode != 1))
+                            throw new InvalidOperationException("Phiên bản này không dùng tài liệu Word độc lập.");
 
                         /*
                          * Kiểm tra optimistic concurrency cho Contract.
@@ -1919,13 +2032,24 @@ namespace ContractManagement.Domains.Services.Contract
                             contract.ParentContractId,
                             request.CustomerId);
 
+                        var isDraft = currentStatus == ContractStatus.Draft;
+                        if (!isDraft && request.Items.Any(x => x.OverrideCatalogUnit))
+                            throw new ArgumentException("Chỉ được đổi đơn vị hạng mục khi hợp đồng còn Nháp.");
+
                         await ValidateCatalogSourcesAsync(
                             request.Items
                                 .Where(x => !x.ContractItemId.HasValue)
                                 .Cast<CreateContractItemRequest>()
-                                .ToList(), (ContractLanguageMode)contract.LanguageMode);
+                                .ToList(), language, useDraftItemEdits: isDraft);
+                        foreach (var item in request.Items.Where(x => x.OverrideCatalogUnit))
+                        {
+                            item.UnitName = ContractManagement.Domains.Policies.Catalog.CatalogUnitPolicy.Require(item.UnitName, $"Đơn vị của “{item.ItemName}”");
+                            item.UnitNameEn = language == ContractLanguageMode.Bilingual
+                                ? ContractManagement.Domains.Policies.Catalog.CatalogUnitPolicy.Require(item.UnitNameEn, $"Đơn vị tiếng Anh của “{item.ItemName}”")
+                                : NormalizeOptional(item.UnitNameEn);
+                        }
 
-                        ValidateBilingualUpdate(contract, request);
+                        ValidateBilingualUpdate(language, request);
 
                         var existingItems = await _dbContext.TblContractItems
                             .Where(x =>
@@ -1947,7 +2071,14 @@ namespace ContractManagement.Domains.Services.Contract
                             .ToListAsync();
 
                         ValidatePaymentDraft(request.Terms.Select(x => (x.TermKind, x.PaymentMilestones)),
-                            contract.LanguageMode == (byte)ContractLanguageMode.Bilingual);
+                            language == ContractLanguageMode.Bilingual);
+                        if (changesLanguage && language == ContractLanguageMode.Vietnamese &&
+                            await (from term in _dbContext.TblContractAppendixTerms
+                                   join appendix in _dbContext.TblContractAppendices on term.AppendixId equals appendix.AppendixId
+                                   where appendix.ContractId == contractId && appendix.VersionId == version.VersionId
+                                       && term.BilingualContentMode == (byte)BilingualContentMode.Combined
+                                   select term.AppendixTermId).AnyAsync())
+                            throw new ArgumentException("Hãy chuyển các điều khoản phụ lục đang gộp song ngữ sang nội dung tách riêng trước khi đổi ngôn ngữ.");
                         await EnsurePaymentDraftWritableAsync(existingPaymentMilestones);
                         foreach (var term in request.Terms)
                         {
@@ -1964,6 +2095,7 @@ namespace ContractManagement.Domains.Services.Contract
                             ("CustomerName", previousCustomerAudit.DisplayName),
                             ("ContractName", BuildAuditSafeText(contract.ContractName)),
                             ("ContractNameEn", BuildAuditSafeText(contract.ContractNameEn)),
+                            ("LanguageMode", contract.LanguageMode),
                             ("EffectiveDate", contract.EffectiveDate),
                             ("ExpireDate", contract.ExpireDate),
                             ("CurrencyCode", contract.CurrencyCode),
@@ -2001,6 +2133,8 @@ namespace ContractManagement.Domains.Services.Contract
                         var currencyCode = NormalizeCurrencyCode(
                             request.CurrencyCode);
                         var totals = ContractFinancialTotals.Zero;
+                        contract.ContractDirection = (byte)direction;
+                        contract.LanguageMode = (byte)language;
                         var changedLegalBases = await UpdateLegalBasesAsync(contract, version, request.LegalBases, employeeId, now);
 
                         /*
@@ -2063,9 +2197,16 @@ namespace ContractManagement.Domains.Services.Contract
                                     || item.SourceServiceId.HasValue)
                                 {
                                     requestItem.ItemCode = item.ItemCode;
-                                    requestItem.UnitName = item.UnitName;
-                                    requestItem.UnitNameEn = item.UnitNameEn;
+                                    if (!requestItem.OverrideCatalogUnit)
+                                    {
+                                        requestItem.UnitName = item.UnitName;
+                                        requestItem.UnitNameEn = item.UnitNameEn;
+                                    }
                                 }
+
+                                if (changesLanguage && language == ContractLanguageMode.Bilingual)
+                                    ContractManagement.Domains.Policies.Catalog.CatalogUnitPolicy.Require(
+                                        requestItem.UnitNameEn, $"Đơn vị tiếng Anh của “{requestItem.ItemName}”");
 
                                 var changedFields = GetChangedItemFields(
                                     item,
@@ -2267,7 +2408,7 @@ namespace ContractManagement.Domains.Services.Contract
                         /*
                          * Cập nhật phần header của Contract.
                          *
-                         * ContractType, TemplateVersionId, LanguageMode,
+                         * ContractType, TemplateVersionId,
                          * Status và ContractCode không được thay đổi tại API này.
                          */
                         contract.CustomerId = request.CustomerId;
@@ -2301,6 +2442,14 @@ namespace ContractManagement.Domains.Services.Contract
                                 ("RemovedTerms", BuildAuditSummary(removedTermAudits))))
                             .ToList();
 
+                        var auditNotes = new List<string>();
+                        if (changesDirection)
+                            auditNotes.Add(previousDirection == ContractDirection.Sale
+                                ? "Đã đổi chiều giao dịch từ Bán sang Mua."
+                                : "Đã đổi chiều giao dịch từ Mua sang Bán.");
+                        if (changedLegalBases.Count > 0)
+                            auditNotes.Add("Đã sửa căn cứ: " + string.Join(", ", changedLegalBases));
+
                         _contractAuditWriter.StageEmployeeAudits(
                         [
                             new EmployeeContractAuditWriteRequest(
@@ -2316,8 +2465,7 @@ namespace ContractManagement.Domains.Services.Contract
                             SubjectId: contract.ContractId,
                             PreviousValues:
                                 previousAuditValuesWithRemovedEntries,
-                            Reason: changedLegalBases.Count > 0
-                                ? BuildAuditSafeText("Đã sửa căn cứ: " + string.Join(", ", changedLegalBases)) : null,
+                            Reason: auditNotes.Count > 0 ? BuildAuditSafeText(string.Join(" ", auditNotes)) : null,
                             NewValues: ContractAuditValues.Create(
                                 ("Status", contract.Status),
                                 ("ResponsibleEmployeeId", contract.EmployeeId),
@@ -2326,6 +2474,7 @@ namespace ContractManagement.Domains.Services.Contract
                                 ("CustomerName", requestedCustomerAudit.DisplayName),
                                 ("ContractName", BuildAuditSafeText(contract.ContractName)),
                                 ("ContractNameEn", BuildAuditSafeText(contract.ContractNameEn)),
+                                ("LanguageMode", contract.LanguageMode),
                                 ("EffectiveDate", contract.EffectiveDate),
                                 ("ExpireDate", contract.ExpireDate),
                                 ("CurrencyCode", contract.CurrencyCode),
@@ -2797,6 +2946,7 @@ namespace ContractManagement.Domains.Services.Contract
 
                         var newVersion = new TblContractVersion
                         {
+                            DocumentMode = sourceVersion.DocumentMode,
                             ContractId = contract.ContractId,
                             VersionNo = checked(sourceVersion.VersionNo + 1),
                             SourceVersionId = sourceVersion.VersionId,
@@ -3630,6 +3780,7 @@ namespace ContractManagement.Domains.Services.Contract
 
             return new ContractVersionDetailResponse
             {
+                HasAdministrativeTextEdits = await _dbContext.Set<AdministrativeTextEdit>().AnyAsync(x => x.Target == "contract" && x.ParentId == contractId && x.VersionId == versionId),
                 VersionId = version.VersionId,
                 VersionNo = version.VersionNo,
                 SourceVersionId = version.SourceVersionId,
@@ -5427,8 +5578,11 @@ namespace ContractManagement.Domains.Services.Contract
         }
 
         private async Task ValidateCatalogSourcesAsync(
-            List<CreateContractItemRequest> items, ContractLanguageMode languageMode)
+            List<CreateContractItemRequest> items, ContractLanguageMode languageMode, bool useDraftItemEdits = false)
         {
+            bool HasUnitOverride(CreateContractItemRequest item) =>
+                useDraftItemEdits && item is UpdateContractItemRequest { OverrideCatalogUnit: true };
+
             foreach (var item in items)
             {
                 if (item.ItemType == ContractItemType.Product
@@ -5481,10 +5635,15 @@ namespace ContractManagement.Domains.Services.Contract
                 {
                     item.ItemCode = activeProducts[
                         item.SourceProductId!.Value].ProductCode;
-                    item.ItemNameEn = NormalizeOptional(activeProducts[item.SourceProductId.Value].ProductNameEn);
-                    item.UnitName = ContractManagement.Domains.Policies.Catalog.CatalogUnitPolicy.Require(
-                        activeProducts[item.SourceProductId.Value].UnitName, $"Đơn vị của sản phẩm '{item.ItemName}'");
-                    item.UnitNameEn = NormalizeOptional(activeProducts[item.SourceProductId.Value].UnitNameEn);
+                    var source = activeProducts[item.SourceProductId.Value];
+                    if (!useDraftItemEdits || item.ItemNameEn == null)
+                        item.ItemNameEn = NormalizeOptional(source.ProductNameEn);
+                    if (!HasUnitOverride(item))
+                    {
+                        item.UnitName = ContractManagement.Domains.Policies.Catalog.CatalogUnitPolicy.Require(
+                            source.UnitName, $"Đơn vị của sản phẩm '{item.ItemName}'");
+                        item.UnitNameEn = NormalizeOptional(source.UnitNameEn);
+                    }
                 }
             }
 
@@ -5515,10 +5674,15 @@ namespace ContractManagement.Domains.Services.Contract
                              x => x.SourceServiceId.HasValue))
                 {
                     item.ItemCode = null;
-                    item.ItemNameEn = NormalizeOptional(activeServices[item.SourceServiceId!.Value].ServiceNameEn);
-                    item.UnitName = ContractManagement.Domains.Policies.Catalog.CatalogUnitPolicy.Require(
-                        activeServices[item.SourceServiceId.Value].UnitName, $"Đơn vị của dịch vụ '{item.ItemName}'");
-                    item.UnitNameEn = NormalizeOptional(activeServices[item.SourceServiceId.Value].UnitNameEn);
+                    var source = activeServices[item.SourceServiceId!.Value];
+                    if (!useDraftItemEdits || item.ItemNameEn == null)
+                        item.ItemNameEn = NormalizeOptional(source.ServiceNameEn);
+                    if (!HasUnitOverride(item))
+                    {
+                        item.UnitName = ContractManagement.Domains.Policies.Catalog.CatalogUnitPolicy.Require(
+                            source.UnitName, $"Đơn vị của dịch vụ '{item.ItemName}'");
+                        item.UnitNameEn = NormalizeOptional(source.UnitNameEn);
+                    }
                 }
             }
             if (languageMode == ContractLanguageMode.Bilingual)
@@ -5527,7 +5691,7 @@ namespace ContractManagement.Domains.Services.Contract
                 {
                     item.ItemNameEn = ContractManagement.Domains.Policies.Catalog.CatalogEnglishNamePolicy.Require(
                         item.ItemNameEn, $"Tên tiếng Anh của sản phẩm/dịch vụ '{item.ItemName}' trong danh mục");
-                    if (item.SourceProductId.HasValue || item.SourceServiceId.HasValue)
+                    if ((item.SourceProductId.HasValue || item.SourceServiceId.HasValue) && !HasUnitOverride(item))
                         item.UnitNameEn = ContractManagement.Domains.Policies.Catalog.CatalogUnitPolicy.Require(
                             item.UnitNameEn, $"Đơn vị tiếng Anh của sản phẩm/dịch vụ '{item.ItemName}' trong danh mục");
                 }
@@ -6149,14 +6313,13 @@ namespace ContractManagement.Domains.Services.Contract
         }
 
         private static void ValidateBilingualUpdate(
-            TblContract contract,
+            ContractLanguageMode language,
             UpdateContractDraftRequest request)
         {
             foreach (var term in request.Terms)
-                BilingualContentPolicy.Validate(term.BilingualContentMode, (ContractLanguageMode)contract.LanguageMode,
+                BilingualContentPolicy.Validate(term.BilingualContentMode, language,
                     term.TermTitleEn, term.TermContent, term.TermContentEn, term.TermCode);
-            if (contract.LanguageMode !=
-                (byte)ContractLanguageMode.Bilingual)
+            if (language != ContractLanguageMode.Bilingual)
             {
                 return;
             }

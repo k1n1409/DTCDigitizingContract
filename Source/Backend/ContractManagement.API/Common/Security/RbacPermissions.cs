@@ -30,6 +30,7 @@ public static class RbacPermissions
     public const string ContractPaymentManage = "contract.payment.manage";
     public const string ContractPaymentManageOwn = "contract.payment.manage.own";
     public const string ContractComplete = "contract.complete";
+    public const string ContractTextCorrect = "contract.text-correct";
     public const string ContractSupport = "contract.support";
     public const string TemplateAvailableRead = "template.available.read";
     public const string TemplateManage = "template.manage";
@@ -67,12 +68,12 @@ public static class EmployeePermissionCatalog
             [EmployeeType.Sale] = Merge(RbacPermissions.CustomerManage),
             [EmployeeType.Marketing] = Merge(RbacPermissions.CustomerManage),
             // AdminOfficer is the subordinate manager/administration role, not the boss.
-            [EmployeeType.AdminOfficer] = Administration(RbacPermissions.ContractApprovalReview).Where(permission =>
+            [EmployeeType.AdminOfficer] = Administration(RbacPermissions.ContractApprovalReview, RbacPermissions.ContractTextCorrect).Where(permission =>
                 permission != RbacPermissions.ContractSigningManage).ToArray(),
             [EmployeeType.Technical] = Merge(RbacPermissions.ContractExecutionRead),
             [EmployeeType.Accountant] = Administration().Where(permission =>
                 permission != RbacPermissions.ContractSigningManage).ToArray(),
-            [EmployeeType.Manager] = Administration(RbacPermissions.ContractApprovalDecide)
+            [EmployeeType.Manager] = Administration(RbacPermissions.ContractApprovalDecide, RbacPermissions.ContractTextCorrect)
         };
 
     private static IReadOnlyList<string> Administration(params string[] additionalPermissions) =>

@@ -15,7 +15,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ContractManagement.Domains.Services.Contract;
 
-public sealed class ContractCompletionService : IContractCompletionService
+public sealed partial class ContractCompletionService : IContractCompletionService
 {
     private const string PaymentObjectType = "ContractPaymentEvidence";
     private const string AcceptanceObjectType = "ContractAcceptanceEvidence";
@@ -498,13 +498,19 @@ public sealed class ContractCompletionService : IContractCompletionService
             if (contract.CurrentVersionId != request.CurrentVersionId) throw Rule("CompletionStateChanged", "Version hiện hành đã thay đổi.", StatusCodes.Status409Conflict);
             var version = await _db.TblContractVersions.SingleAsync(x => x.VersionId == request.CurrentVersionId && x.ContractId == contractId, cancellationToken);
             Match(version.RowVersion, Decode(request.VersionRowVersion), "Version hợp đồng");
+            if (!version.IsLocked || ContractOutcomePolicy.Effective(contract) is ContractOutcome.Failed or ContractOutcome.StoppedRenewal)
+                throw Rule("ContractOutcomeNotAllowed", "Version chưa khóa hoặc hợp đồng đã chốt Thất bại/Dừng gia hạn.", StatusCodes.Status409Conflict);
+            if (request.Reason?.Length > 1000) throw new ArgumentException("Ghi chú tối đa 1000 ký tự.");
             var readiness = await BuildReadinessAsync(contract, version, cancellationToken);
             if (!readiness.Ready) throw Rule("ContractNotReadyForCompletion", "Hợp đồng chưa đủ điều kiện hoàn tất.", StatusCodes.Status409Conflict);
             var previous = contract.Status;
             contract.Status = (byte)ContractStatus.Completed; contract.UpdatedEmployeeId = employeeId; contract.UpdateDate = DateTime.UtcNow;
+            contract.Outcome = (byte)ContractOutcome.Succeeded; contract.OutcomeReason = request.Reason?.Trim();
+            contract.OutcomeUpdatedByEmployeeId = employeeId; contract.OutcomeUpdatedAtUtc = contract.UpdateDate;
             _audit.StageEmployeeAudits([new(contractId, version.VersionId, employeeId,
                 ContractAuditActionTypes.ContractCompleted, ContractAuditResults.Succeeded, contract.UpdateDate.Value,
                 PreviousContractStatus: previous, NewContractStatus: contract.Status,
+                Reason: request.Reason?.Trim(),
                 NewValues: ContractAuditValues.Create(("Status", contract.Status), ("CurrentVersionId", version.VersionId),
                     ("TotalAmount", readiness.TotalAmount), ("PaidAmount", readiness.PaidAmount))) ]);
             if (_notifications is not null)
@@ -691,7 +697,7 @@ public sealed class ContractCompletionService : IContractCompletionService
                 .Where(x => x.ContractVersionLegalSnapshotId == legal.ContractVersionLegalSnapshotId).ToListAsync(ct);
         var roleParties = ContractManagement.Domains.Policies.Contract.ContractPartyRoleResolver.Resolve(
             direction, parties.SingleOrDefault(x => x.PartyRole == 1), parties.SingleOrDefault(x => x.PartyRole == 2));
-        return new ContractCompletionReadinessResponse {
+        var result = new ContractCompletionReadinessResponse {
             ContractDirection = direction, TenantReceivesPayment = roleParties.TenantReceivesPayment,
             PayerName = roleParties.Customer.Value?.LegalName, PayeeName = roleParties.Provider.Value?.LegalName,
             PayeeBankAccount = roleParties.Provider.Value?.BankAccountNumber, PayeeBankName = roleParties.Provider.Value?.BankName,
@@ -714,6 +720,14 @@ public sealed class ContractCompletionService : IContractCompletionService
                     ContractCompletionBlockerCode.AcceptanceIncomplete =>
                         $"Còn {acceptanceProgress.RemainingMilestoneIds.Count} đợt thanh toán chưa được nghiệm thu bằng biên bản đã ký hợp lệ.",
                     _ => "Hợp đồng chưa được thanh toán đủ." } }).ToList() };
+        if (ContractOutcomePolicy.Effective(contract) is ContractOutcome.Failed or ContractOutcome.StoppedRenewal)
+        {
+            result.Ready = false;
+            result.Blockers = result.Blockers.Concat([new ContractCompletionBlockerResponse {
+                Code = "OUTCOME_FINALIZED", Message = "Hợp đồng đã chốt kết quả Thất bại/Dừng gia hạn; không thể hoàn tất lại."
+            }]).ToList();
+        }
+        return result;
     }
 
     private async Task<(TblContract Contract, TblContractVersion Version)> LoadWritableStateAsync(int contractId, int versionId, string contractRv, string versionRv, CancellationToken ct)

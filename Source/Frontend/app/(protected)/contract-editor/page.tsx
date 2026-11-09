@@ -33,6 +33,11 @@ import { getBlobApiErrorMessage } from "@/lib/api-error";
 import { EditorBlocksPanel } from "@/components/contracts/editor-blocks-panel";
 import { DocumentPdfPreview } from "@/components/contracts/document-pdf-preview";
 import { EditorSnippetsPanel } from "@/components/contracts/editor-snippets-panel";
+import { DocumentLayoutDialog } from "@/components/contracts/document-layout-dialog";
+import { EditorContractBindingDialog } from "@/components/contracts/editor-contract-binding-dialog";
+import { checkEditorDocument } from "@/lib/document-preflight";
+import { DEFAULT_DOCUMENT_LAYOUT, documentPageSize } from "@/lib/contract-rich-text";
+import { LayoutTemplate, FilePlus2 } from "lucide-react";
 
 type Field = { label: string; original: string; value: string; paragraph: number };
 function paragraphs(content: string) {
@@ -48,6 +53,7 @@ function paragraphs(content: string) {
 function EditorContent() {
   const router = useRouter();
   const [libraryOpen, setLibraryOpen] = useState(true);
+  const [layoutOpen, setLayoutOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [selectedField, setSelectedField] = useState<{ key: string; detach?: (replacement?: string) => void } | null>(null);
@@ -64,6 +70,7 @@ function EditorContent() {
   const [pending, setPending] = useState<(() => void) | null>(null);
   const [bindings, setBindings] = useState<Record<string, string>>({});
   const [draftDialog, setDraftDialog] = useState<"list" | "history" | "templates" | null>(null);
+  const [bindingDocument, setBindingDocument] = useState<{ id: string; revision: number } | null>(null);
   const [templateConfirm, setTemplateConfirm] = useState(false);
   const [sharedTemplate, setSharedTemplate] = useState(false);
   const [templateAcknowledged, setTemplateAcknowledged] = useState(false);
@@ -84,7 +91,7 @@ function EditorContent() {
     setDocumentEpoch(epoch => epoch + 1);
     setContent(value.content); setTitle(value.title); setBindings(value.bindings || {}); setFields([]); setWarning("");
   };
-  const server = useEditorServerDraft({ title, content, bindings }, dirty, setDirty, applySnapshot, busy || pending !== null || templateConfirm);
+  const server = useEditorServerDraft({ title, content, bindings }, dirty, setDirty, applySnapshot, busy || pending !== null || templateConfirm || layoutOpen);
   const libraryEntryOpened = useRef(false);
   useEffect(() => {
     if (libraryEntryOpened.current) return;
@@ -98,6 +105,33 @@ function EditorContent() {
     }
   }, [server]);
   const locked = busy || server.saving || server.loading;
+  const documentModel = parseContractRichText(content);
+  const pageLayout = documentModel.layout || DEFAULT_DOCUMENT_LAYOUT;
+  const pageSize = documentPageSize(pageLayout);
+  const ensureDocumentReady = () => {
+    const blocking = checkEditorDocument(content, bindings).filter(check => check.blocking);
+    if (!blocking.length) return true;
+    const missing = blocking.filter(check => check.fieldKey);
+    if (missing.length) {
+      toast.error(`Cần bổ sung ${missing.length} thông tin trước khi tiếp tục.`);
+      setPdfMode(false);
+      setPreview(false);
+      selectField(missing[0].fieldKey!);
+    } else toast.error(blocking[0].description);
+    return false;
+  };
+  const prepareContract = async () => {
+    if (locked || !ensureDocumentReady()) return;
+    setBusy(true);
+    try { const saved = await server.save(); if (saved) router.push(`/contracts/create-from-word?editorDocument=${encodeURIComponent(saved.id)}&editorRevision=${saved.revision}`); else toast.error("Chưa lưu được tài liệu, chưa chuyển sang tạo hợp đồng."); }
+    finally { setBusy(false); }
+  };
+  const previewPdf = async () => {
+    if (pdfMode) { setPdfMode(false); return; }
+    setBusy(true);
+    try { const saved = await server.save(); if (!saved) { toast.error("Chưa lưu được tài liệu, không xem bản cũ."); return; } setPreview(false); setPdfMode(true); }
+    finally { setBusy(false); }
+  };
   const canManageTemplates = hasPermission(user?.permissions, RBAC_PERMISSIONS.templateManage);
   const missingFields = editorFieldKeys(content).filter(key => !bindings[key]?.trim());
   const selectField = (key: string, detach?: (replacement?: string) => void) => { setSelectedField({ key, detach }); setFieldValue(bindings[key] || ""); };
@@ -159,8 +193,7 @@ function EditorContent() {
     finally { setBusy(false); }
   };
   const download = async (format: "docx" | "pdf", previewOnly = false) => {
-    const missing = editorFieldKeys(content).filter(key => !bindings[key]?.trim());
-    if (missing.length) { toast.error(`Cần bổ sung ${missing.length} thông tin trước khi xuất.`); selectField(missing[0]); return; }
+    if (locked || !ensureDocumentReady()) return;
     const popup = previewOnly ? window.open("about:blank", "_blank") : null;
     if (previewOnly && !popup) { toast.error("Trình duyệt chặn tab xem trước. Hãy cho phép mở tab mới."); return; }
     if (popup) popup.opener = null;
@@ -179,23 +212,27 @@ function EditorContent() {
     finally { setBusy(false); }
   };
   return <main className="document-workspace-ui flex min-h-0 flex-1 flex-col bg-muted/40" onDragOver={e => { if (e.dataTransfer.types.includes("Files")) e.preventDefault(); }} onDrop={e => { if (!e.dataTransfer.types.includes("Files")) return; e.preventDefault(); if (locked) return; const files = [...e.dataTransfer.files]; if (files.length !== 1) { toast.error("Kéo một tệp DOCX mỗi lần."); return; } confirmReplace(() => void importFile(files[0])); }}>
-    <header inert={busy} className="flex h-16 shrink-0 items-center gap-3 border-b border-border bg-primary px-4">
+    <header inert={busy} className="flex min-h-[4rem] shrink-0 flex-wrap items-center gap-3 border-b border-border bg-primary px-4 py-3">
       <div className="flex w-48 shrink-0 items-center gap-2 xl:w-64"><FileText className="size-5 shrink-0 text-primary-foreground" /><Input className="min-w-0 bg-background text-foreground" showControls={false} aria-label="Tên tài liệu" value={title} maxLength={100} onChange={e => { setTitle(e.target.value); setDirty(true); }} /></div>
-      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto py-2 [&_button]:h-9">
+      <div className="flex min-w-0 flex-1 basis-full flex-wrap items-center gap-2 lg:basis-0 [&_button]:h-9">
       <WorkspaceExpandButton beforeExpand={() => setLibraryOpen(false)} />
       <Button variant="outline" disabled={locked} onClick={() => void server.save()}><Save className="size-4 mr-2" />{server.saving ? "Đang lưu..." : "Lưu server"}</Button>
       <Button size="icon" variant="outline" title="Hoàn tác (Ctrl+Z)" aria-label="Hoàn tác văn bản" disabled={locked || preview || pdfMode || !historyState.canUndo} onClick={() => setHistoryRequest({ id: crypto.randomUUID(), action: "undo" })}><Undo2 className="size-4" /></Button>
       <Button size="icon" variant="outline" title="Làm lại (Ctrl+Shift+Z)" aria-label="Làm lại văn bản" disabled={locked || preview || pdfMode || !historyState.canRedo} onClick={() => setHistoryRequest({ id: crypto.randomUUID(), action: "redo" })}><Redo2 className="size-4" /></Button>
       <Button variant="outline" onClick={() => setLibraryOpen(v => !v)}><Library className="mr-2 size-4" />Thư viện</Button>
-      <Button variant="outline" disabled={locked} onClick={() => confirmReplace(() => { server.detach(); applySnapshot({ title: "Hợp đồng mới", content: "", bindings: {} }); setDirty(false); })}><Plus className="mr-2 size-4" />Tài liệu trắng</Button>
       <Button variant="outline" disabled={locked || !content} onClick={() => { setSharedTemplate(false); setTemplateAcknowledged(false); setTemplateConfirm(true); }}>Lưu thành mẫu mới</Button>
-      <Button variant="outline" onClick={() => { setPdfMode(false); setPreview(value => !value); }}>{preview ? "Tiếp tục soạn" : "Xem dữ liệu đã điền"}</Button>
-      <Button variant="outline" disabled={!server.identity || locked || (dirty && !pdfMode)} onClick={() => setPdfMode(value => !value)}>{pdfMode ? "Quay lại soạn thảo" : "Bản PDF thực tế"}</Button>
+      <Button variant="outline" disabled={locked || !content} onClick={() => void previewPdf()}>{pdfMode ? "Tiếp tục soạn" : "Xem thử PDF"}</Button>
       <Button variant="outline" title="Xem trước bản Word dưới dạng PDF trong tab mới, không tải file" disabled={locked || !content} onClick={() => void download("pdf", true)}><FileText className="size-4 mr-2" />Xem Word</Button>
       <Button size="icon" variant="outline" title="Tải Word (.docx)" aria-label="Tải Word" disabled={locked || !content} onClick={() => void download("docx")}><Download className="size-4" /></Button>
       </div>
       <Button variant="secondary" className="h-9 shrink-0 gap-2 rounded-lg bg-white px-4 font-semibold text-primary shadow-sm hover:bg-white/90" disabled={busy || server.loading || !content} onClick={() => void download("pdf")}>{busy ? <Loader2 className="size-4 animate-spin" /> : <FileDown className="size-4" />}{busy ? "Đang xuất..." : "Xuất PDF"}</Button>
     </header>
+    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-background px-4 py-2 [&>button]:border-slate-300 dark:[&>button]:border-slate-600">
+      <Button variant="outline" disabled={locked} onClick={() => setLayoutOpen(true)}><LayoutTemplate className="mr-2 size-4" />Bố cục trang</Button>
+      <Button variant="outline" disabled={locked || !content} onClick={() => void prepareContract()}><FilePlus2 className="mr-2 size-4" />Tạo hợp đồng từ tài liệu này</Button>
+      <Button variant="outline" disabled={locked || !content} onClick={() => { if (!ensureDocumentReady()) return; void server.save().then(saved => { if (saved) setBindingDocument({ id: saved.id, revision: saved.revision }); else toast.error("Chưa lưu được bản đang soạn, chưa thể cập nhật hợp đồng."); }); }}><Save className="mr-2 size-4" />Cập nhật tài liệu cho hợp đồng đã có</Button>
+      <Button variant="outline" disabled={locked} onClick={() => confirmReplace(() => { server.detach(); applySnapshot({ title: "Hợp đồng mới", content: "", bindings: {} }); setDirty(false); })}><Plus className="mr-2 size-4" />Tài liệu trắng</Button>
+    </div>
     <DocumentWorkspaceStatus state={server.error ? "error" : server.saving ? "saving" : dirty || !server.identity ? "unsaved" : "saved"}>{server.error ? <><span>{server.error} Thay đổi chưa được lưu lên server.</span><Button size="sm" variant="outline" disabled={locked} onClick={() => void server.save()}>Thử lưu lại</Button></> : server.saving ? "Đang lưu — bạn có thể tiếp tục soạn thảo." : dirty ? "Có thay đổi mới · Tự lưu sau 2 giây ngừng nhập." : server.identity ? `Đã lưu trên server · phiên bản ${server.identity.revision}` : "Tài liệu mới · Bắt đầu soạn hoặc chọn một mẫu trong thư viện."}</DocumentWorkspaceStatus>
     {server.identity?.isTemplate && <p className="border-b bg-primary/5 px-4 py-2 text-sm text-primary">Đang sửa {server.identity.isSharedTemplate ? "mẫu dùng chung trong tenant" : "mẫu cá nhân — chỉ bạn truy cập được"}. Lưu server tạo phiên bản mới; không sửa tài liệu đã tạo từ mẫu.</p>}
     <input hidden type="file" accept=".docx" ref={uploadRef} onChange={e => { void importFile(e.target.files?.[0]); e.target.value = ""; }} />
@@ -222,11 +259,11 @@ function EditorContent() {
         {pdfMode && server.identity ? <div className="flex h-full min-h-[400px] flex-col"><DocumentPdfPreview kind={server.identity.isTemplate ? "template" : "editor"} id={server.identity.id} revision={server.identity.revision} /></div> : <>
         {(warning || parseContractRichText(content).preservation) && <p role="status" className="mx-auto mb-4 max-w-4xl rounded-lg border bg-amber-50 p-3 text-sm text-amber-950">{warning || "Tài liệu giữ Word gốc: ảnh, header/footer, lề trang và khối phức tạp được giữ khi xuất. Khối nét đứt chỉ xem; dùng PDF thực tế để đối chiếu bố cục."}</p>}
         <div className="mx-auto mb-4 max-w-[210mm] space-y-3 rounded-2xl border bg-card p-4 text-sm shadow-sm"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold">Thông tin trong tài liệu</h2><p className="mt-1 text-muted-foreground">Bấm nhãn màu xanh trên trang để điền. Các vị trí liên kết sẽ cập nhật cùng nhau.</p></div>{missingFields.length > 0 && <span className="shrink-0 rounded-full bg-amber-100 px-3 py-1 font-medium text-amber-950 dark:bg-amber-950 dark:text-amber-200">Còn {missingFields.length} thông tin chưa điền</span>}</div>{missingFields.length > 0 ? <><div className="flex flex-wrap gap-2">{missingFields.slice(0, 4).map(key => <Button key={key} className="max-w-full truncate rounded-full" size="sm" variant="outline" disabled={locked} onClick={() => selectField(key)}>{editorFieldLabel(key)}</Button>)}</div><Button disabled={locked} className="h-auto min-h-10 max-w-full whitespace-normal rounded-xl px-4 py-2 font-semibold shadow-sm" onClick={() => { setSideTab("data"); setToolsOpen(true); }}>Xem tất cả thông tin chưa điền</Button></> : <p className="rounded-xl bg-primary/5 px-3 py-2 text-primary">{editorFieldKeys(content).length ? "Đã điền đủ các trường đang dùng. Hãy kiểm tra bản PDF trước khi xuất." : "Thêm nội dung từ bảng bên phải hoặc bắt đầu gõ trên trang bên dưới."}</p>}</div>
-        <div data-document-content inert={server.loading || busy} className="mx-auto min-h-[297mm] w-full max-w-[210mm] rounded-xl bg-card p-4 shadow-lg lg:p-8">{preview ? <ContractRichTextContent value={resolveEditorFields(content, Object.fromEntries(editorFieldKeys(content).map(key => [key, bindings[key]?.trim() ? bindings[key] : `［${editorFieldLabel(key)}］`])))} /> : <ContractRichTextEditor key={documentEpoch}
+        <div data-document-content inert={server.loading || busy} style={{ width: `${pageSize.width}mm`, maxWidth: "none", minHeight: `${pageSize.height}mm`, padding: `${pageLayout.marginTop}mm ${pageLayout.marginRight}mm ${pageLayout.marginBottom}mm ${pageLayout.marginLeft}mm`, "--document-line-spacing": String(pageLayout.lineSpacing), "--document-space-before": `${pageLayout.spaceBefore}pt`, "--document-space-after": `${pageLayout.spaceAfter}pt` } as React.CSSProperties} className={`mx-auto rounded-xl bg-card shadow-lg ${documentModel.layout || !documentModel.preservation ? "document-custom-layout" : ""}`}>{preview ? <ContractRichTextContent value={resolveEditorFields(content, Object.fromEntries(editorFieldKeys(content).map(key => [key, bindings[key]?.trim() ? bindings[key] : `［${editorFieldLabel(key)}］`])))} /> : <ContractRichTextEditor key={documentEpoch}
           historyRequest={historyRequest}
           onHistoryStateChange={setHistoryState}
           onHistoryHandled={id => setHistoryRequest(current => current?.id === id ? undefined : current)}
-          smartFields={{ bindings, onSelect: selectField }} insertRequest={insertRequest} onInsertHandled={id => setInsertRequest(current => current?.id === id ? undefined : current)} className="[&_.tiptap]:!h-auto [&_.tiptap]:!min-h-[1000px] [&_.tiptap]:!overflow-visible [&_.tiptap]:py-8 [&_.tiptap]:px-5" value={content} onChange={update} ariaLabel="Nội dung tài liệu hợp đồng" placeholder="Bắt đầu soạn thảo hợp đồng hoặc nhập DOCX..." />}</div>
+          smartFields={{ bindings, onSelect: selectField }} insertRequest={insertRequest} onInsertHandled={id => setInsertRequest(current => current?.id === id ? undefined : current)} className="[&_.tiptap]:!h-auto [&_.tiptap]:!min-h-[400px] [&_.tiptap]:!overflow-visible [&_.tiptap]:!p-0" value={content} onChange={update} ariaLabel="Nội dung tài liệu hợp đồng" placeholder="Bắt đầu soạn thảo hợp đồng hoặc nhập DOCX..." />}</div>
         </>}
       </section>
       <EditorSnippetsPanel key={documentEpoch} bindings={bindings} onBindingsChange={values => { setBindings(current => ({ ...current, ...values })); setDirty(true); }} disabled={locked || preview || pdfMode} onInsert={content => setInsertRequest({ id: crypto.randomUUID(), content })} />
@@ -237,6 +274,8 @@ function EditorContent() {
     <EditorDraftsDialog key={draftDialog || "closed"} mode={draftDialog} documentId={server.identity?.id} canManage={canManageTemplates} onClose={() => setDraftDialog(null)} onOpen={(id, revision) => { setDraftDialog(null); confirmReplace(() => void server.open(id, revision)); }} onUseTemplate={id => { setDraftDialog(null); confirmReplace(() => void server.open(id, undefined, true)); }} />
     <ConfirmDialog isOpen={deleteReviewField !== null} onClose={() => setDeleteReviewField(null)} title="Xóa giá trị khỏi tài liệu?" description="Chỉ xóa giá trị tại đoạn được nhận diện trong tài liệu đang soạn. Thao tác này không xóa hồ sơ khách hàng." variant="destructive" confirmText="Xóa giá trị" onConfirm={() => { if (deleteReviewField !== null) applyField(deleteReviewField, true); setDeleteReviewField(null); }} />
     <ConfirmDialog isOpen={templateConfirm} onClose={() => setTemplateConfirm(false)} title="Lưu thành mẫu văn bản" description={<div className="space-y-4"><p>Giá trị liên kết được xóa để điền lại khi dùng mẫu. Văn bản gõ trực tiếp vẫn được giữ nguyên.</p><TemplatePrivacyOptions shared={sharedTemplate} onChange={setSharedTemplate} canShare={canManageTemplates} acknowledged={templateAcknowledged} onAcknowledge={setTemplateAcknowledged} /></div>} confirmDisabled={!templateAcknowledged} confirmText="Tạo mẫu văn bản" onConfirm={() => { if (!templateAcknowledged) return; setTemplateConfirm(false); void server.saveAsTemplate(sharedTemplate).then(ok => { if (ok) { setSideTab("blocks"); toast.success("Đã tạo mẫu trong thư viện."); } }); }} />
+    <DocumentLayoutDialog key={`${layoutOpen}-${JSON.stringify(documentModel.layout)}`} open={layoutOpen} value={documentModel.layout} preserved={!!documentModel.preservation} onClose={() => setLayoutOpen(false)} onApply={layout => { update(serializeContractRichText({ ...documentModel, layout })); setLayoutOpen(false); }} />
+    <EditorContractBindingDialog key={bindingDocument ? `${bindingDocument.id}-${bindingDocument.revision}` : "closed"} document={bindingDocument} onClose={() => setBindingDocument(null)} />
   </main>;
 }
 export default function ContractEditorPage() { return <PermissionGuard permission={RBAC_PERMISSIONS.contractCreate}><EditorContent /></PermissionGuard>; }

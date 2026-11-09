@@ -22,6 +22,62 @@ namespace ContractManagement.Infrastructure.Migrations.Application
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("ContractManagement.Infrastructure.Persistence.Application.Models.AdministrativeTextEdit", b =>
+                {
+                    b.Property<long>("AdministrativeTextEditId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("AdministrativeTextEditId"));
+
+                    b.Property<string>("AfterJson")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("BeforeJson")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("EmployeeId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<int>("ParentId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<int>("RowId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Target")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<int>("TenantId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("VersionId")
+                        .HasColumnType("int");
+
+                    b.HasKey("AdministrativeTextEditId");
+
+                    b.HasIndex("TenantId", "Target", "ParentId", "VersionId");
+
+                    b.ToTable("tbl_AdministrativeTextEdit", (string)null);
+                });
+
             modelBuilder.Entity("ContractManagement.Infrastructure.Persistence.Application.Models.ContractEditorDocument", b =>
                 {
                     b.Property<Guid>("Id")
@@ -123,6 +179,64 @@ namespace ContractManagement.Infrastructure.Migrations.Application
                     b.HasIndex("TenantId", "EmployeeId");
 
                     b.ToTable("tbl_ContractEditorSourceAsset", (string)null);
+                });
+
+            modelBuilder.Entity("ContractManagement.Infrastructure.Persistence.Application.Models.ContractEditorSourceSnapshot", b =>
+                {
+                    b.Property<int>("ContractId")
+                        .HasColumnType("int");
+
+                    b.Property<byte[]>("Docx")
+                        .IsRequired()
+                        .HasColumnType("varbinary(max)");
+
+                    b.HasKey("ContractId");
+
+                    b.ToTable("tbl_ContractEditorSourceSnapshot", (string)null);
+                });
+
+            modelBuilder.Entity("ContractManagement.Infrastructure.Persistence.Application.Models.ContractVersionEditorDocument", b =>
+                {
+                    b.Property<int>("VersionId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("BoundAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("BoundByEmployeeId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("BusinessHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<int>("ContractId")
+                        .HasColumnType("int");
+
+                    b.Property<byte[]>("Docx")
+                        .IsRequired()
+                        .HasColumnType("varbinary(max)");
+
+                    b.Property<string>("DocxHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<Guid>("EditorDocumentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("EditorRevision")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("VersionId");
+
+                    b.ToTable("tbl_ContractVersionEditorDocument", (string)null);
                 });
 
             modelBuilder.Entity("ContractManagement.Infrastructure.Persistence.Application.Models.DocumentLibraryEntry", b =>
@@ -252,6 +366,38 @@ namespace ContractManagement.Infrastructure.Migrations.Application
                     b.HasKey("DocumentId", "Revision");
 
                     b.ToTable("tbl_ImportedContractRevision", (string)null);
+                });
+
+            modelBuilder.Entity("ContractManagement.Infrastructure.Persistence.Application.Models.SavedContractFilter", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("EmployeeId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("FilterJson")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<int>("TenantId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "EmployeeId");
+
+                    b.ToTable("tbl_SavedContractFilter", (string)null);
                 });
 
             modelBuilder.Entity("ContractManagement.Infrastructure.Persistence.Application.Models.TblApprovalHistory", b =>
@@ -527,6 +673,15 @@ namespace ContractManagement.Infrastructure.Migrations.Application
                     b.Property<int>("CustomerId")
                         .HasColumnType("int");
 
+                    b.Property<Guid?>("EditorSourceDocumentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("EditorSourceRevision")
+                        .HasColumnType("int");
+
+                    b.Property<string>("EditorSourceTitle")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<DateTime?>("EffectiveDate")
                         .HasColumnType("datetime2");
 
@@ -540,6 +695,19 @@ namespace ContractManagement.Infrastructure.Migrations.Application
                         .ValueGeneratedOnAdd()
                         .HasColumnType("tinyint")
                         .HasDefaultValue((byte)1);
+
+                    b.Property<byte>("Outcome")
+                        .HasColumnType("tinyint");
+
+                    b.Property<string>("OutcomeReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<DateTime?>("OutcomeUpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int?>("OutcomeUpdatedByEmployeeId")
+                        .HasColumnType("int");
 
                     b.Property<int?>("ParentContractId")
                         .HasColumnType("int");
@@ -627,7 +795,7 @@ namespace ContractManagement.Infrastructure.Migrations.Application
 
                             t.HasCheckConstraint("CK_tbl_Contract_Status", "[Status] IN (0, 1, 2, 3, 4, 5, 6, 7, 8)");
 
-                            t.HasCheckConstraint("CK_tbl_Contract_TemplateVersionId", "[TemplateVersionId] > 0");
+                            t.HasCheckConstraint("CK_tbl_Contract_TemplateVersionId", "[TemplateVersionId] > 0 OR ([TemplateVersionId] = 0 AND [EditorSourceDocumentId] IS NOT NULL)");
 
                             t.HasCheckConstraint("CK_tbl_Contract_TotalAmount", "[TotalAmount] >= 0");
                         });
@@ -3930,6 +4098,9 @@ namespace ContractManagement.Infrastructure.Migrations.Application
                         .HasDefaultValue("VND")
                         .IsFixedLength();
 
+                    b.Property<byte>("DocumentMode")
+                        .HasColumnType("tinyint");
+
                     b.Property<bool>("IsLocked")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("bit")
@@ -4011,7 +4182,7 @@ namespace ContractManagement.Infrastructure.Migrations.Application
 
                             t.HasCheckConstraint("CK_tbl_ContractVersion_SourceVersionId", "[SourceVersionId] IS NULL OR [SourceVersionId] > 0");
 
-                            t.HasCheckConstraint("CK_tbl_ContractVersion_TemplateVersionId", "[TemplateVersionId] > 0");
+                            t.HasCheckConstraint("CK_tbl_ContractVersion_TemplateVersionId", "[TemplateVersionId] > 0 OR ([TemplateVersionId] = 0 AND [DocumentMode] = 1)");
 
                             t.HasCheckConstraint("CK_tbl_ContractVersion_VersionNo", "[VersionNo] > 0");
                         });
@@ -4117,7 +4288,7 @@ namespace ContractManagement.Infrastructure.Migrations.Application
 
                             t.HasCheckConstraint("CK_tbl_ContractVersionLegalSnapshot_Financials", "[Subtotal] >= 0 AND [TotalDiscount] >= 0 AND [TotalVat] >= 0 AND [TotalAmount] >= 0");
 
-                            t.HasCheckConstraint("CK_tbl_ContractVersionLegalSnapshot_Ids", "[VersionId] > 0 AND [ContractId] > 0 AND [VersionNo] > 0 AND [TemplateVersionId] > 0 AND [CreatedByEmployeeId] > 0");
+                            t.HasCheckConstraint("CK_tbl_ContractVersionLegalSnapshot_Ids", "[VersionId] > 0 AND [ContractId] > 0 AND [VersionNo] > 0 AND [TemplateVersionId] >= 0 AND [CreatedByEmployeeId] > 0");
                         });
                 });
 
@@ -6018,6 +6189,24 @@ namespace ContractManagement.Infrastructure.Migrations.Application
                     b.HasOne("ContractManagement.Infrastructure.Persistence.Application.Models.ContractEditorDocument", null)
                         .WithMany()
                         .HasForeignKey("DocumentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ContractManagement.Infrastructure.Persistence.Application.Models.ContractEditorSourceSnapshot", b =>
+                {
+                    b.HasOne("ContractManagement.Infrastructure.Persistence.Application.Models.TblContract", null)
+                        .WithOne()
+                        .HasForeignKey("ContractManagement.Infrastructure.Persistence.Application.Models.ContractEditorSourceSnapshot", "ContractId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ContractManagement.Infrastructure.Persistence.Application.Models.ContractVersionEditorDocument", b =>
+                {
+                    b.HasOne("ContractManagement.Infrastructure.Persistence.Application.Models.TblContractVersion", null)
+                        .WithOne()
+                        .HasForeignKey("ContractManagement.Infrastructure.Persistence.Application.Models.ContractVersionEditorDocument", "VersionId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

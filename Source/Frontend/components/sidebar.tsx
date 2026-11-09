@@ -13,6 +13,7 @@ import {
   FileBadge,
   FileSignature,
   FileText,
+  LayoutGrid,
   LibraryBig,
   LogOut,
   Menu,
@@ -44,17 +45,16 @@ import { resolveProfileImageUrl } from "@/services/profile-api";
 import { EmployeeType } from "@/services/employees-api";
 import { ContractStatus } from "@/services/contract-api";
 
-interface NavItem {
+export interface NavItem {
   label: string;
   icon: typeof FileText;
   href: string;
   requiredPermissions?: RbacPermission[];
 }
 
-const navItems: NavItem[] = [
+export const navItems: NavItem[] = [
   { label: "Nhập hợp đồng Word cũ", icon: FileText, href: "/contract-import", requiredPermissions: [RBAC_PERMISSIONS.contractCreate] },
   { label: "Soạn thảo hợp đồng", icon: FileSignature, href: "/contract-editor", requiredPermissions: [RBAC_PERMISSIONS.contractCreate] },
-  // Dashboard is retained at /dashboard; restore its navigation entry when needed.
   {
     label: "Hợp đồng",
     icon: FileText,
@@ -71,7 +71,13 @@ const navItems: NavItem[] = [
     requiredPermissions: [RBAC_PERMISSIONS.contractApprovalDecide],
   },
   {
-    label: "Mẫu hợp đồng",
+    label: "Mẫu hợp đồng Word",
+    icon: LibraryBig,
+    href: "/contract-word-templates",
+    requiredPermissions: [RBAC_PERMISSIONS.contractCreate],
+  },
+  {
+    label: "Mẫu nâng cao",
     icon: LibraryBig,
     href: "/admin/contract-templates",
     requiredPermissions: [RBAC_PERMISSIONS.templateManage],
@@ -182,7 +188,8 @@ function SidebarContent() {
   };
 
   const renderNavItems = () => (
-    <nav className="flex-1 px-3 py-4 space-y-1.5 flex flex-col items-stretch overflow-y-auto">
+    <nav className={`min-h-0 flex-1 px-3 py-4 space-y-1.5 flex flex-col items-stretch overflow-x-hidden overflow-y-auto overscroll-contain ${isExpanded || isMobileOpen ? "[scrollbar-gutter:stable]" : ""}`}>
+      {renderNavLink({ label: "Không gian làm việc", icon: LayoutGrid, href: "/dashboard" })}
       {contractItems.length > 0 && (
         <div>
           <button type="button" title="Hợp đồng" aria-expanded={isContractsOpen && (isExpanded || isMobileOpen)}
@@ -241,12 +248,13 @@ function SidebarContent() {
       </button>
 
       <aside
-        className={`relative hidden lg:flex h-screen bg-card border-r border-border flex-col flex-shrink-0 transition-all duration-300 ease-in-out z-20 ${
-          isExpanded ? "w-64" : "w-20"
+        data-app-sidebar="desktop"
+        className={`relative hidden lg:flex h-dvh bg-card border-r border-border flex-col shrink-0 [--spacing:0.25rem] transition-[width] duration-300 ease-in-out z-20 ${
+          isExpanded ? "w-[16rem]" : "w-[5rem]"
         }`}
       >
         <div
-          className={`h-16 border-b border-border p-4 flex items-center transition-all duration-300 ${
+          className={`h-[4rem] shrink-0 border-b border-border p-4 flex items-center ${
             isExpanded ? "justify-between" : "justify-center"
           }`}
         >
@@ -291,8 +299,8 @@ function SidebarContent() {
             onClick={() => setIsMobileOpen(false)}
           />
 
-          <aside className="fixed left-0 top-0 h-screen w-[280px] bg-card z-50 flex flex-col animate-in slide-in-from-left duration-300 shadow-2xl lg:hidden">
-            <div className="h-16 border-b border-border p-4 flex items-center justify-between shrink-0">
+          <aside data-app-sidebar="mobile" className="fixed left-0 top-0 h-dvh w-[280px] [--spacing:0.25rem] bg-card z-50 flex flex-col animate-in slide-in-from-left duration-300 shadow-2xl lg:hidden">
+            <div className="h-[4rem] border-b border-border p-4 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm shadow-primary/20">
                   <FileText className="w-4 h-4 text-primary-foreground" />

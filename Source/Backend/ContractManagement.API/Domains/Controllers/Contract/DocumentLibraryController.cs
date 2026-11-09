@@ -154,7 +154,7 @@ public sealed class DocumentLibraryController(DbDtctechContext db, ICurrentTenan
         var version = revision ?? (kind == "imported"
             ? await db.Set<ImportedContractDocument>().Where(x => x.Id == id && x.TenantId == TenantId && x.EmployeeId == Actor).Select(x => x.Revision).SingleAsync(ct)
             : await db.Set<ContractEditorDocument>().Where(x => x.Id == id && x.TenantId == TenantId).Select(x => x.Revision).SingleAsync(ct));
-        var key = $"document-preview:{TenantId}:{Actor}:{kind}:{id}:{version}";
+        var key = $"document-preview:letterhead-v1:{TenantId}:{Actor}:{kind}:{id}:{version}";
         Response.Headers["X-Document-Revision"] = version.ToString(System.Globalization.CultureInfo.InvariantCulture);
         return await DocumentPreviewCache.GetAsync(key, async () => {
             if (kind == "imported") return await new ImportedContractsController(db, tenant, pdf) { ControllerContext = ControllerContext }.Export(id, "pdf", version, ct);

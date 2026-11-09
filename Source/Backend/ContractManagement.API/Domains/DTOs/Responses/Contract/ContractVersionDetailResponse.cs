@@ -5,6 +5,7 @@
     /// </summary>
     public class ContractVersionDetailResponse
     {
+        public bool HasAdministrativeTextEdits { get; set; }
         public int VersionId { get; set; }
 
         public int VersionNo { get; set; }

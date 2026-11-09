@@ -71,6 +71,12 @@ export const getContractItemTypeLabel = (type?: ContractItemType) => {
   }
 };
 
+export enum ContractOutcome { InProgress = 0, Succeeded = 1, Failed = 2, StoppedRenewal = 3 }
+export const getContractOutcomeLabel = (outcome: ContractOutcome) => ({
+  [ContractOutcome.InProgress]: "Đang thực hiện", [ContractOutcome.Succeeded]: "Thành công",
+  [ContractOutcome.Failed]: "Thất bại", [ContractOutcome.StoppedRenewal]: "Dừng gia hạn",
+})[outcome];
+
 export enum ContractStatus {
   Draft = 0,
   Negotiating = 1,
@@ -218,6 +224,7 @@ export interface CreateContractItemRequest {
 export interface UpdateContractItemRequest extends CreateContractItemRequest {
   contractItemId?: number | null;
   rowVersion?: string | null;
+  overrideCatalogUnit?: boolean;
 }
 
 export interface CreateContractRequest {
@@ -390,6 +397,8 @@ export interface UpdateContractDraftRequest {
   currentVersionId: number;
   currentVersionRowVersion: string;
   customerId: number;
+  contractDirection?: ContractDirection;
+  languageMode?: ContractLanguageMode;
   contractName: string;
   contractNameEn?: string | null;
   effectiveDate?: string | null;
@@ -466,6 +475,8 @@ export interface ContractItemDetailResponse {
   itemDescriptionEn?: string | null;
   unitName?: string | null;
   unitNameEn?: string | null;
+  // Local edit flag; not part of the persisted item snapshot.
+  overrideCatalogUnit?: boolean;
   quantity: number;
   unitPrice: number;
   lineSubtotal: number;
@@ -573,6 +584,7 @@ export interface UpdateContractLegalBasisRequest {
 }
 
 export interface ContractVersionDetailResponse {
+  hasAdministrativeTextEdits?: boolean;
   versionId: number;
   versionNo: number;
   sourceVersionId?: number | null;
@@ -646,6 +658,13 @@ export interface ContractApprovalReadinessResponse {
 }
 
 export interface ContractDetailResponse {
+  hasAdministrativeTextEdits?: boolean;
+  outcome?: ContractOutcome;
+  outcomeReason?: string | null;
+  outcomeUpdatedAtUtc?: string | null;
+  editorSourceDocumentId?: string | null;
+  editorSourceRevision?: number | null;
+  editorSourceTitle?: string | null;
   contractId: number;
   contractCode?: string | null;
   contractName: string;
@@ -674,6 +693,13 @@ export interface ContractDetailResponse {
   currentVersion: ContractVersionDetailResponse;
   approvalReadiness: ContractApprovalReadinessResponse;
 }
+
+export const canEditDirectWordDraftSettings = (contract: ContractDetailResponse) =>
+  contract.status === ContractStatus.Draft &&
+  contract.templateVersionId === 0 &&
+  contract.currentVersion?.templateVersionId === 0 &&
+  !!contract.editorSourceDocumentId &&
+  !contract.parentContractId;
 
 export interface CreateContractResponse {
   contractId: number;
@@ -771,6 +797,12 @@ export interface CreateContractNegotiationRoundResponse {
 }
 
 export interface ContractFilterRequest {
+  contractId?: number;
+  employeeId?: number; departmentId?: number; onlyMine?: boolean;
+  minAmount?: string | number; maxAmount?: string | number; currencyCode?: string;
+  expireFrom?: string; expireTo?: string; expiringInDays?: number;
+  paymentState?: number;
+  outcome?: ContractOutcome;
   contractDirection?: ContractDirection;
   page?: number;
   pageSize?: number;
@@ -781,6 +813,7 @@ export interface ContractFilterRequest {
 }
 
 export interface ContractListItemResponse {
+  outcome?: ContractOutcome;
   contractId: number;
   contractCode?: string | null;
   contractName: string;
@@ -932,6 +965,7 @@ export const contractApi = {
       normalizeCreateContractRequest(data),
     );
   },
+  createFromEditor: (id: string, revision: number, data: CreateContractRequest) => axiosClient.post<unknown, CreateContractResponse>(`/api/contract-editor-drafts/${encodeURIComponent(id)}/create-contract`, { revision, reviewed: true, contract: normalizeCreateContractRequest(data) }),
   transferResponsibility: (
     id: number,
     data: TransferContractResponsibilityRequest,

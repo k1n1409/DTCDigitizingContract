@@ -1001,7 +1001,8 @@ public sealed partial class ContractServiceSlice04Tests
     }
 
     private static ContractService CreateService(
-        DbDtctechContext context)
+        DbDtctechContext context,
+        IContractEditorBindingFingerprint? editorFingerprint = null)
     {
         var tenant = new CurrentTenant();
         tenant.Set(new ResolvedTenant(
@@ -1021,7 +1022,7 @@ public sealed partial class ContractServiceSlice04Tests
 
         return new ContractService(
             context,
-            new ContractAuditWriter(context, tenant, accessor));
+            new ContractAuditWriter(context, tenant, accessor), editorBindingFingerprint: editorFingerprint);
     }
 
     private static async Task SeedCreateDependenciesAsync(

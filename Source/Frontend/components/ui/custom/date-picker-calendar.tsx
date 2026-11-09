@@ -19,6 +19,7 @@ interface DatePickerCalendarProps {
   date: Date | undefined;
   onChange: (date: Date | undefined) => void;
   onConfirm?: () => void;
+  confirmOnDaySelect?: boolean;
   label?: string;
   disabled?: boolean;
   minDate?: Date;
@@ -72,6 +73,7 @@ export function DatePickerCalendar({
   date,
   onChange,
   onConfirm,
+  confirmOnDaySelect = false,
   label = "Nhập ngày",
   disabled = false,
   minDate,
@@ -236,13 +238,17 @@ export function DatePickerCalendar({
           setParts(toDateParts(displayDate));
           setTouched(false);
         }}
-        onSelect={(selectedDate) => {
-          if (selectedDate) {
-            setParts(toDateParts(selectedDate));
-            setMonth(selectedDate);
+        onSelect={(selectedDate, clickedDate) => {
+          // A day click in confirm mode commits even if it is already selected.
+          // DayPicker otherwise treats a second click on the same day as clear.
+          const nextDate = confirmOnDaySelect ? clickedDate : selectedDate;
+          if (nextDate) {
+            setParts(toDateParts(nextDate));
+            setMonth(nextDate);
           }
           setTouched(false);
-          onChange(selectedDate);
+          onChange(nextDate);
+          if (confirmOnDaySelect && nextDate) onConfirm?.();
         }}
         startMonth={minDate}
         endMonth={maxDate}

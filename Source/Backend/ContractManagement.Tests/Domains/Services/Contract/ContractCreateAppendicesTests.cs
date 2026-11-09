@@ -8,6 +8,92 @@ namespace ContractManagement.Tests.Domains.Services.Contract;
 public sealed partial class ContractServiceSlice04Tests
 {
     [Fact]
+    public async Task CreateFromWordWithoutTemplate_SavesManualPaymentPlanAndOfficialDocument()
+    {
+        await using var db = CreateContext();
+        await SeedCreateDependenciesAsync(db);
+        db.TblContractTemplateVersions.RemoveRange(db.TblContractTemplateVersions);
+        db.TblContractTemplates.RemoveRange(db.TblContractTemplates);
+        await db.SaveChangesAsync();
+        var request = CreateAppendicesRequest();
+        request.TemplateVersionId = 0;
+        request.Appendices = null;
+        request.Terms = [new() {
+            TermCode = "PAY", TermTitle = "Thanh toán", TermContent = RichText("Thanh toán khi hợp đồng có hiệu lực"),
+            TermKind = ContractTermKind.Payment,
+            PaymentMilestones = [new() {
+                MilestoneCode = "PAY_1", TitleVi = "Thanh toán toàn bộ", PaymentPercent = 100m,
+                DueAnchor = PaymentDueAnchor.ContractEffectiveDate, DayCountMode = PaymentDayCountMode.CalendarDays
+            }]
+        }];
+        var service = CreateService(db, new CreationFingerprint(db));
+        await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(request, EmployeeId));
+        Assert.Empty(db.TblContracts);
+        request.EditorSourceDocumentId = Guid.NewGuid();
+        request.EditorSourceRevision = 1;
+        request.EditorSourceTitle = "Bản Word đã rà soát";
+        request.EditorSourceDocx = [1, 2, 3];
+        var result = await service.CreateAsync(request, EmployeeId);
+        Assert.Equal(0, result.TemplateVersionId);
+        Assert.Equal(1, (await db.TblContractVersions.SingleAsync()).DocumentMode);
+        Assert.Equal(100m, (await db.TblContractPaymentMilestones.SingleAsync()).PaymentPercent);
+        Assert.Single(await db.Set<ContractManagement.Infrastructure.Persistence.Application.Models.ContractVersionEditorDocument>().ToListAsync());
+    }
+
+    [Fact]
+    public async Task CreateFromEditor_AtomicallyPinsOfficialDocumentAlongsideDraft_WithoutChangingTemplate()
+    {
+        await using var db = CreateContext();
+        await SeedCreateDependenciesAsync(db); await SeedTemplateAppendicesAsync(db);
+        var request = CreateAppendicesRequest();
+        request.EditorSourceDocumentId = Guid.NewGuid(); request.EditorSourceRevision = 3;
+        request.EditorSourceTitle = "Tài liệu soạn thảo"; request.EditorSourceDocx = [1, 2, 3];
+        var capture = new CreationFingerprint(db);
+        var result = await CreateService(db, capture).CreateAsync(request, EmployeeId);
+        var contract = await db.TblContracts.SingleAsync(x => x.ContractId == result.ContractId);
+        var snapshot = await db.Set<ContractManagement.Infrastructure.Persistence.Application.Models.ContractEditorSourceSnapshot>().SingleAsync();
+        Assert.Equal(request.EditorSourceDocumentId, contract.EditorSourceDocumentId);
+        Assert.Equal(3, contract.EditorSourceRevision); Assert.Equal("Tài liệu soạn thảo", contract.EditorSourceTitle);
+        Assert.Equal(result.ContractId, snapshot.ContractId); Assert.Equal(new byte[] { 1, 2, 3 }, snapshot.Docx);
+        Assert.Equal((byte)ContractStatus.Draft, contract.Status);
+        Assert.Equal(request.TemplateVersionId, contract.TemplateVersionId);
+        var pin = await db.Set<ContractManagement.Infrastructure.Persistence.Application.Models.ContractVersionEditorDocument>().SingleAsync();
+        Assert.Equal(result.CurrentVersionId, pin.VersionId); Assert.Equal(result.ContractId, pin.ContractId);
+        Assert.Equal(request.EditorSourceDocumentId, pin.EditorDocumentId); Assert.Equal(3, pin.EditorRevision);
+        Assert.Equal(snapshot.Docx, pin.Docx); Assert.NotSame(snapshot.Docx, pin.Docx);
+        Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(pin.Docx)), pin.DocxHash);
+        Assert.Equal(new string('A', 64), pin.BusinessHash);
+        Assert.Equal(1, (await db.TblContractVersions.SingleAsync()).DocumentMode);
+        Assert.Equal(EmployeeId, capture.OwnerId);
+        Assert.Contains(await db.TblContractAudits.ToListAsync(), x => x.Reason != null && x.Reason.Contains("Tự ghim tài liệu"));
+    }
+
+    private sealed class CreationFingerprint(ContractManagement.Infrastructure.Persistence.Application.DbDtctechContext db)
+        : ContractManagement.Domains.Interfaces.Contract.IContractEditorBindingFingerprint
+    {
+        public int OwnerId;
+        public async Task<string> CaptureEditorBindingHashAsync(int id, int employeeId, CancellationToken ct = default)
+        {
+            OwnerId = employeeId;
+            var contract = await db.TblContracts.AsNoTracking().SingleAsync(x => x.ContractId == id, ct);
+            Assert.NotNull(contract.CurrentVersionId);
+            Assert.NotEmpty(await db.TblContractItems.Where(x => x.ContractId == id).ToListAsync(ct));
+            return new string('A', 64);
+        }
+    }
+
+    [Fact]
+    public async Task CreateFromEditor_WithoutFingerprintServiceFailsBeforeAnyWrites()
+    {
+        await using var db = CreateContext(); await SeedCreateDependenciesAsync(db);
+        var request = CreateAppendicesRequest();
+        request.EditorSourceDocumentId = Guid.NewGuid(); request.EditorSourceRevision = 1;
+        request.EditorSourceTitle = "Reviewed document"; request.EditorSourceDocx = [1, 2, 3];
+        await Assert.ThrowsAsync<InvalidOperationException>(() => CreateService(db).CreateAsync(request, EmployeeId));
+        Assert.Empty(db.TblContracts); Assert.Empty(db.Set<ContractManagement.Infrastructure.Persistence.Application.Models.ContractVersionEditorDocument>());
+    }
+
+    [Fact]
     public async Task Create_WithEditedAndCustomAppendices_PersistsExactContentsAndOrder()
     {
         await using var db = CreateContext();

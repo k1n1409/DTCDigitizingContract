@@ -7,6 +7,7 @@ public sealed class CatalogPickerItemResponse
     public int SourceId { get; set; }
     public ContractItemType ItemType { get; set; }
     public string? Name { get; set; }
+    public string? Code { get; set; }
     public string? NameEn { get; set; }
     public string? UnitName { get; set; }
     public string? UnitNameEn { get; set; }

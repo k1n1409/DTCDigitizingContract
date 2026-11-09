@@ -78,6 +78,114 @@ public partial class ContractServiceResponsibilityTransferTests
         Assert.Equal("Giấy phép", item.UnitName); Assert.Equal("License", item.UnitNameEn);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UpdateDraft_SavesCatalogItemEditsOnlyOnContract(bool existing)
+    {
+        await using var context = CreateContext();
+        await SeedContractAsync(context);
+        context.TblProducts.Add(new() { ProductId = 501, ProductCode = "CAT-501", ProductName = "Sản phẩm",
+            ProductNameEn = "Catalog item", UnitName = "Tháng", UnitNameEn = "Month", Status = 1 });
+        if (existing)
+        {
+            context.TblContractItems.Add(new() { ContractItemId = 41, ContractId = ContractId, VersionId = VersionId,
+                ItemType = (byte)ContractItemType.Product, SourceProductId = 501, ItemCode = "CAT-501",
+                ItemName = "Tên cũ", UnitName = "Giấy phép", Quantity = 1, UnitPrice = 100,
+                LineSubtotal = 100, LineTotal = 100, DisplayOrder = 1, RowVersion = InitialRowVersion() });
+        }
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+
+        var request = CreateUpdateRequest();
+        var line = request.Items[0];
+        if (existing)
+        {
+            line.ContractItemId = 41;
+            line.RowVersion = Convert.ToBase64String(InitialRowVersion());
+        }
+        line.SourceProductId = 501;
+        line.ItemCode = "DO-NOT-CHANGE";
+        line.ItemName = "Tên theo hợp đồng";
+        line.ItemNameEn = "Contract item";
+        line.ItemDescription = "Nội dung riêng";
+        line.UnitName = " Bộ ";
+        line.UnitNameEn = " Set ";
+        line.OverrideCatalogUnit = true;
+
+        var detail = await CreateService(context).UpdateDraftAsync(ContractId, request, CurrentResponsibleEmployeeId);
+        var item = Assert.Single(detail.CurrentVersion.Items);
+        Assert.Equal("CAT-501", item.ItemCode);
+        Assert.Equal("Tên theo hợp đồng", item.ItemName);
+        Assert.Equal("Contract item", item.ItemNameEn);
+        Assert.Equal("Nội dung riêng", item.ItemDescription);
+        Assert.Equal("Bộ", item.UnitName);
+        Assert.Equal("Set", item.UnitNameEn);
+        var catalog = await context.TblProducts.SingleAsync();
+        Assert.Equal("Sản phẩm", catalog.ProductName);
+        Assert.Equal("Tháng", catalog.UnitName);
+    }
+
+    [Fact]
+    public async Task UpdateDraft_RejectsUnitOverrideDuringNegotiation()
+    {
+        await using var context = CreateContext();
+        await SeedContractAsync(context);
+        (await context.TblContracts.SingleAsync()).Status = (byte)ContractStatus.Negotiating;
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+        var request = CreateUpdateRequest();
+        request.Items[0].UnitName = "Bộ";
+        request.Items[0].OverrideCatalogUnit = true;
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() =>
+            CreateService(context).UpdateDraftAsync(ContractId, request, CurrentResponsibleEmployeeId));
+        Assert.Contains("chỉ được đổi đơn vị", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(ContractStatus.Draft)]
+    [InlineData(ContractStatus.Negotiating)]
+    public async Task UpdateDraft_OnlyDirectWordDraftCanChangeDocumentSettings(ContractStatus status)
+    {
+        await using var context = CreateContext();
+        await SeedContractAsync(context);
+        var contract = await context.TblContracts.SingleAsync();
+        contract.Status = (byte)status;
+        contract.TemplateVersionId = 0;
+        contract.EditorSourceDocumentId = Guid.NewGuid();
+        var version = await context.TblContractVersions.SingleAsync();
+        version.TemplateVersionId = 0;
+        version.DocumentMode = 1;
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+
+        var request = CreateUpdateRequest();
+        request.ContractDirection = ContractDirection.Purchase;
+        request.LanguageMode = ContractLanguageMode.Bilingual;
+        request.ContractNameEn = "Test contract";
+        request.Items[0].ItemNameEn = "Test item";
+        request.Items[0].UnitName = "Bộ";
+        request.Items[0].UnitNameEn = "Set";
+        request.Terms[0].TermTitleEn = "General terms";
+        request.Terms[0].TermContentEn = RichText("Test content");
+
+        var service = CreateService(context);
+        if (status == ContractStatus.Draft)
+        {
+            var result = await service.UpdateDraftAsync(ContractId, request, CurrentResponsibleEmployeeId);
+            Assert.Equal(ContractDirection.Purchase, result.ContractDirection);
+            Assert.Equal(ContractLanguageMode.Bilingual, result.LanguageMode);
+            Assert.Contains("Bán sang Mua", (await context.TblContractAudits.SingleAsync()).Reason);
+        }
+        else
+        {
+            var error = await Assert.ThrowsAsync<ArgumentException>(() =>
+                service.UpdateDraftAsync(ContractId, request, CurrentResponsibleEmployeeId));
+            Assert.Contains("Không được đổi chiều", error.Message);
+        }
+    }
+
     [Fact]
     public async Task CurrentResponsible_ShouldTransferSuccessfully()
     {

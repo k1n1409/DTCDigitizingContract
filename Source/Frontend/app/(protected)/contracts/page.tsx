@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ColumnDef, PaginationState, Row } from "@tanstack/react-table";
 import {
@@ -13,6 +13,7 @@ import {
   Plus,
   Users,
   WalletCards,
+  ClipboardCheck,
 } from "lucide-react";
 import { Header } from "@/components/ui/custom/header";
 import { Button } from "@/components/ui/button";
@@ -30,6 +31,11 @@ import { formatCurrency } from "@/lib/format-currency";
 import { formatDate } from "@/lib/format-date";
 import { useAuthStore } from "@/hooks/use-auth-store";
 import { hasPermission, RBAC_PERMISSIONS } from "@/lib/rbac";
+import { ContractOutcomeDialog } from "@/components/contracts/contract-outcome-dialog";
+import { ContractWorkFilters } from "@/components/contracts/contract-work-filters";
+import { pickWorkFilters, type ContractWorkFilter } from "@/lib/contract-work-filters";
+import { getApiErrorMessage } from "@/lib/api-error";
+import { clearContractList, lastAvailablePage, readContractList, rememberContractList } from "@/lib/contract-list-return";
 import {
   contractApi,
   ContractFilterRequest,
@@ -41,12 +47,15 @@ import {
   getContractTypeLabel,
   getContractDirectionLabel,
   statusClasses,
+  ContractOutcome,
+  getContractOutcomeLabel,
 } from "@/services/contract-api";
 
-function ContractStatusBadge({ status }: { status: ContractStatus }) {
+function ContractStatusBadge({ status, outcome = ContractOutcome.InProgress }: { status: ContractStatus; outcome?: ContractOutcome }) {
+  const result = outcome || (status === ContractStatus.Completed ? ContractOutcome.Succeeded : ContractOutcome.InProgress);
   return (
-    <Badge variant="outline" className={statusClasses[status] || ""}>
-      {status === ContractStatus.Signed ? "Đã ký kết" : status === ContractStatus.Completed ? "Thành công" : getContractStatusLabel(status)}
+    <Badge title={`Quy trình: ${getContractStatusLabel(status)}`} variant="outline" className={result === ContractOutcome.Failed ? "border-red-300 bg-red-50 text-red-700" : result === ContractOutcome.StoppedRenewal ? "border-slate-400 bg-slate-100 text-slate-700" : statusClasses[status] || ""}>
+      {result ? getContractOutcomeLabel(result) : status === ContractStatus.Signed ? "Đã ký kết" : getContractStatusLabel(status)}
     </Badge>
   );
 }
@@ -109,13 +118,20 @@ const CONTRACT_TYPE_FILTER_OPTIONS = [
   },
 ];
 
-function ContractListPageContent() {
+function ContractListPageContent({ scope }: { scope: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const requestedStatus = searchParams.get("status") || "All";
   const filterStatus = STATUS_FILTER_OPTIONS.some((option) => option.value === requestedStatus) ? requestedStatus : "All";
-  const pendingWorkflow = filterStatus === "stopped-renewal" || filterStatus === "failed";
+  const href = `/contracts${searchParams.size ? `?${searchParams}` : ""}`;
+  const [restored] = useState(() => readContractList(scope, href));
+  const pendingCheck = useRef(restored);
+  const pendingScroll = useRef(restored);
+  const scrollArea = useRef<HTMLDivElement>(null);
+  const previousStatus = useRef(filterStatus);
   const user = useAuthStore((state) => state.user);
+  const canUpdateOutcome = hasPermission(user?.permissions, RBAC_PERMISSIONS.contractComplete);
+  const [outcomeContractId, setOutcomeContractId] = useState<number | null>(null);
   const canCreate = hasPermission(
     user?.permissions,
     RBAC_PERMISSIONS.contractCreate,
@@ -131,40 +147,87 @@ function ContractListPageContent() {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [loadingId, setLoadingId] = useState<number | null>(null);
 
-  const [pagination, setPagination] = useState<PaginationState>({
+  const [pagination, setPagination] = useState<PaginationState>(restored?.pagination ?? {
     pageIndex: 0,
     pageSize: 10,
   });
-  const [searchValue, setSearchValue] = useState<string>("");
-  const [filterDirection, setFilterDirection] = useState("All");
-  const [filterContractType, setFilterContractType] = useState<string>("All");
+  const [searchValue, setSearchValue] = useState(restored?.keyword ?? "");
+  const [filterDirection, setFilterDirection] = useState(restored?.direction ?? "All");
+  const [filterContractType, setFilterContractType] = useState(restored?.type ?? "All");
+  const [workFilters, setWorkFilters] = useState<ContractWorkFilter>(restored?.workFilters ?? {});
+  const [filtersOpen, setFiltersOpen] = useState(restored?.filtersOpen ?? false);
+  const [listError, setListError] = useState("");
+  const [returnNotice, setReturnNotice] = useState("");
+  const sequence = useRef(0);
+  useEffect(() => () => { sequence.current++; }, []);
+  useEffect(() => { clearContractList(); }, []);
+  useEffect(() => {
+    if (previousStatus.current === filterStatus) return;
+    const timer = setTimeout(() => {
+      previousStatus.current = filterStatus;
+      setPagination(p => p.pageIndex ? { ...p, pageIndex: 0 } : p);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [filterStatus]);
+
+  const baseFilters = useMemo<ContractFilterRequest>(() => ({
+    keyword: searchValue || undefined,
+    contractDirection: filterDirection === "All" ? undefined : Number(filterDirection) as ContractDirection,
+    status: filterStatus !== "All" && !["failed", "stopped-renewal", String(ContractStatus.Completed)].includes(filterStatus) ? Number(filterStatus) as ContractStatus : undefined,
+    outcome: filterStatus === "failed" ? ContractOutcome.Failed : filterStatus === "stopped-renewal" ? ContractOutcome.StoppedRenewal : filterStatus === String(ContractStatus.Completed) ? ContractOutcome.Succeeded : filterStatus === String(ContractStatus.Signed) ? ContractOutcome.InProgress : undefined,
+    contractType: filterContractType === "All" ? undefined : Number(filterContractType) as ContractType,
+  }), [searchValue, filterDirection, filterStatus, filterContractType]);
+  const hasFilters = Object.values(baseFilters).some(value => value !== undefined) || Object.keys(pickWorkFilters(workFilters)).length > 0;
+  const paymentOnly = !Object.values(baseFilters).some(value => value !== undefined)
+    && Object.keys(pickWorkFilters(workFilters)).length === 1
+    && (workFilters.paymentState === 0 || workFilters.paymentState === 1);
+
+  const useSavedFilter = (f: ContractFilterRequest) => {
+    setWorkFilters(pickWorkFilters(f)); setSearchValue(f.keyword || "");
+    setFilterDirection(f.contractDirection ? String(f.contractDirection) : "All"); setFilterContractType(f.contractType ? String(f.contractType) : "All");
+    setPagination(p => ({ ...p, pageIndex: 0 }));
+    const nextStatus = f.outcome === ContractOutcome.Failed ? "failed" : f.outcome === ContractOutcome.StoppedRenewal ? "stopped-renewal" : f.outcome === ContractOutcome.Succeeded ? String(ContractStatus.Completed) : f.status === null || f.status === undefined ? "All" : String(f.status);
+    const params = new URLSearchParams(searchParams.toString()); if (nextStatus === "All") params.delete("status"); else params.set("status", nextStatus);
+    router.replace(`/contracts${params.size ? `?${params}` : ""}`, { scroll: false });
+  };
 
   const fetchContracts = useCallback(async () => {
-    if (pendingWorkflow) {
-      setData([]);
-      setRowCount(0);
-      setPageCount(0);
-      setIsLoading(false);
-      return;
-    }
+    const current = ++sequence.current;
+    let repaging = false;
     setIsLoading(true);
     try {
       const params: ContractFilterRequest = {
+        ...baseFilters, ...workFilters,
         page: pagination.pageIndex + 1,
         pageSize: pagination.pageSize,
-        keyword: searchValue || undefined,
-        contractDirection: filterDirection === "All" ? undefined : Number(filterDirection) as ContractDirection,
-        status:
-          filterStatus !== "All"
-            ? (Number(filterStatus) as ContractStatus)
-            : undefined,
-        contractType:
-          filterContractType !== "All"
-            ? (Number(filterContractType) as ContractType)
-            : undefined,
       };
       const res = await contractApi.getList(params);
-      if (res) {
+      if (res && current === sequence.current) {
+        setListError("");
+        const returning = pendingCheck.current;
+        if (returning) {
+          // A missing row on this page may merely have moved to another page.
+          if (hasFilters && !res.items?.some(row => row.contractId === returning.contractId)) {
+            try {
+              const match = await contractApi.getList({ ...params, contractId: returning.contractId, page: 1, pageSize: 1 });
+              if (current !== sequence.current) return;
+              if (match?.totalCount === 0) {
+                const paymentLabel = ["Chưa thanh toán", "Thanh toán một phần", "Đã thanh toán đủ", "Thanh toán vượt giá trị"][workFilters.paymentState ?? -1];
+                setReturnNotice(`${returning.success ? `${returning.success} ` : ""}Hợp đồng vừa mở không còn trong kết quả của bộ lọc hiện tại${paymentLabel ? ` (${paymentLabel})` : ""}.`);
+              }
+            } catch {
+              // Membership check must not prevent the main list from loading.
+            }
+          }
+          if (current !== sequence.current) return;
+          pendingCheck.current = undefined;
+        }
+        const lastPage = lastAvailablePage(res.totalCount || 0, pagination.pageSize);
+        if (pagination.pageIndex > lastPage) {
+          repaging = true;
+          setPagination(p => ({ ...p, pageIndex: lastPage }));
+          return;
+        }
         setData(res.items || []);
         setRowCount(res.totalCount || 0);
         setPageCount(
@@ -173,31 +236,47 @@ function ContractListPageContent() {
         );
       }
     } catch (error) {
+      if (current !== sequence.current) return;
+      setListError(getApiErrorMessage(error, "Không tải được danh sách. Hãy thử lại."));
       console.error("Lỗi khi tải danh sách hợp đồng:", error);
       setData([]);
       setRowCount(0);
       setPageCount(0);
     } finally {
-      setIsLoading(false);
+      if (current === sequence.current && !repaging) setIsLoading(false);
     }
   }, [
     pagination.pageIndex,
     pagination.pageSize,
-    searchValue,
-    filterStatus,
-    filterContractType,
-    filterDirection,
-    pendingWorkflow,
+    baseFilters,
+    workFilters,
+    hasFilters,
   ]);
 
   useEffect(() => {
     fetchContracts();
   }, [fetchContracts]);
 
+  useEffect(() => {
+    if (isLoading || listError || !pendingScroll.current) return;
+    const frame = requestAnimationFrame(() => {
+      const position = pendingScroll.current;
+      const area = scrollArea.current;
+      if (!position || !area) return;
+      area.scrollTop = position.scrollTop;
+      area.querySelector<HTMLElement>("[data-table-scroll]")?.scrollTo(position.tableScrollLeft, position.tableScrollTop);
+      pendingScroll.current = undefined;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [isLoading, listError, data]);
+
   const handleView = useCallback((id: number) => {
+    const table = scrollArea.current?.querySelector<HTMLElement>("[data-table-scroll]");
+    rememberContractList({ scope, href, contractId: id, keyword: searchValue, direction: filterDirection, type: filterContractType,
+      workFilters, filtersOpen, pagination, scrollTop: scrollArea.current?.scrollTop ?? 0, tableScrollTop: table?.scrollTop ?? 0, tableScrollLeft: table?.scrollLeft ?? 0 });
     setLoadingId(id);
     router.push(`/contracts/${id}`);
-  }, [router]);
+  }, [router, scope, href, searchValue, filterDirection, filterContractType, workFilters, filtersOpen, pagination]);
 
   const columns = useMemo<ColumnDef<ContractListItemResponse>[]>(
     () => [
@@ -259,7 +338,7 @@ function ContractListPageContent() {
         header: () => <div className="text-center">Trạng thái</div>,
         cell: ({ row }) => (
           <div className="flex justify-center">
-            <ContractStatusBadge status={row.original.status} />
+            <ContractStatusBadge status={row.original.status} outcome={row.original.outcome} />
           </div>
         ),
       },
@@ -351,6 +430,12 @@ function ContractListPageContent() {
               onPrimaryClick={() => handleView(item.contractId)}
               isLoading={loadingId === item.contractId}
               menuItems={[
+                ...(canUpdateOutcome ? [{
+                  label: "Cập nhật kết quả hợp đồng đã ký",
+                  icon: <ClipboardCheck className="h-4 w-4" />,
+                  disabled: ![ContractStatus.Signed, ContractStatus.Completed].includes(item.status),
+                  onClick: () => setOutcomeContractId(item.contractId),
+                }] : []),
                 {
                   label: "Sao chép mã hợp đồng",
                   icon: <Link2 className="h-4 w-4" />,
@@ -363,7 +448,7 @@ function ContractListPageContent() {
         },
       },
     ],
-    [canExecuteContracts, loadingId, user?.employeeId, pagination.pageIndex, pagination.pageSize, handleView],
+    [canExecuteContracts, canUpdateOutcome, loadingId, user?.employeeId, pagination.pageIndex, pagination.pageSize, handleView],
   );
 
   const totalValue = useMemo(
@@ -445,7 +530,7 @@ function ContractListPageContent() {
     <>
       <Header />
 
-      <div className="grow overflow-y-auto p-2 lg:p-10 space-y-6">
+      <div ref={scrollArea} className="grow overflow-y-auto p-2 lg:p-10 space-y-6">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-foreground">
@@ -457,21 +542,19 @@ function ContractListPageContent() {
             </p>
           </div>
           {canCreate && (
-            <Button
-              className="shadow-sm"
-              onClick={() => router.push("/contracts/create")}
-            >
-              <Plus className="mr-2 h-4 w-4" /> Tạo hợp đồng nháp
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button className="shadow-sm" onClick={() => router.push("/contract-word-templates")}>
+                <Plus className="mr-2 h-4 w-4" /> Tạo từ mẫu Word
+              </Button>
+              <Button variant="outline" onClick={() => router.push("/contracts/create")}>Tạo nháp theo biểu mẫu</Button>
+            </div>
           )}
         </div>
 
         <SummaryCards items={summaryItems} />
-        {pendingWorkflow && <p role="status" className="rounded-xl border bg-muted/40 p-4 text-sm text-muted-foreground">
-          {filterStatus === "stopped-renewal"
-            ? "Dừng gia hạn: hợp đồng hết hạn và không tiếp tục gia hạn. Mục này sẽ có dữ liệu khi bổ sung nghiệp vụ xác nhận dừng gia hạn."
-            : "Thất bại là trạng thái riêng. Mục này sẽ có dữ liệu khi bổ sung nghiệp vụ đánh dấu hợp đồng thất bại."}
-        </p>}
+        <ContractWorkFilters value={workFilters} context={baseFilters} open={filtersOpen} setOpen={setFiltersOpen} onApply={value => { setWorkFilters(value); setPagination(p => ({ ...p, pageIndex: 0 })); }} onUseSaved={useSavedFilter} />
+        {listError && <p role="alert" className="rounded-xl border border-destructive/40 bg-destructive/5 p-3 text-destructive">{listError}<Button variant="outline" className="ml-3" onClick={() => void fetchContracts()}>Thử lại</Button></p>}
+        {returnNotice && <div role="status" className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-primary/30 bg-primary/5 p-3 text-sm"><span>{returnNotice}</span><Button variant="ghost" size="sm" onClick={() => setReturnNotice("")}>Đóng thông báo</Button></div>}
 
         <Card className="border-border shadow-sm bg-card min-h-[500px] flex flex-col gap-0 p-0">
           <CardContent className="p-4 flex flex-col justify-between flex-1 pb-0">
@@ -490,6 +573,8 @@ function ContractListPageContent() {
               searchPlaceholder="Tìm mã hoặc tên hợp đồng..."
               filterSlot={filters}
               isLoading={isLoading}
+              restorePageSize={!restored}
+              emptyMessage={listError ? "Chưa thể tải dữ liệu hợp đồng." : paymentOnly ? "Không có việc cần xử lý trong nhóm thanh toán đang chọn." : hasFilters ? "Không có hợp đồng khớp bộ lọc. Hãy đổi hoặc bỏ bớt điều kiện." : "Chưa có hợp đồng nào trong phạm vi bạn được xem."}
               onRowClick={(row) => handleView(row.contractId)}
               mobileCardRenderer={(
                 row: Row<ContractListItemResponse>,
@@ -514,7 +599,7 @@ function ContractListPageContent() {
                           {item.contractName}
                         </p>
                       </div>
-                      <ContractStatusBadge status={item.status} />
+                      <ContractStatusBadge status={item.status} outcome={item.outcome} />
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted/40 p-2.5 text-sm">
@@ -556,13 +641,16 @@ function ContractListPageContent() {
           </CardContent>
         </Card>
       </div>
+      {outcomeContractId !== null && <ContractOutcomeDialog key={outcomeContractId} contractId={outcomeContractId} onClose={() => setOutcomeContractId(null)} onUpdated={() => void fetchContracts()} />}
     </>
   );
 }
 
 function ContractListRoute() {
-  const params = useSearchParams();
-  return <ContractListPageContent key={params.get("status") || "All"} />;
+  const user = useAuthStore(state => state.user);
+  if (!user) return <p className="p-6">Đang tải tài khoản...</p>;
+  const scope = `${user.tenantId}:${user.employeeId}`;
+  return <ContractListPageContent key={scope} scope={scope} />;
 }
 
 export default function ContractListPage() {

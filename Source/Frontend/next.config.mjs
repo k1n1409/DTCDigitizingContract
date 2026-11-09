@@ -9,6 +9,14 @@ if (typeof branding.name !== "string" || !branding.name.trim() || branding.name 
 const nextConfig = {
   env: { NEXT_PUBLIC_APP_NAME: branding.name },
   output: "standalone",
+  async redirects() {
+    return [{
+      source: "/contracts/create",
+      has: [{ type: "query", key: "editorDocument" }],
+      destination: "/contracts/create-from-word",
+      permanent: false,
+    }];
+  },
   async headers() {
     return ["/verify-recovery-email", "/forgot-password", "/reset-password"].map(source => ({ source, headers: [
       { key: "Referrer-Policy", value: "no-referrer" },
