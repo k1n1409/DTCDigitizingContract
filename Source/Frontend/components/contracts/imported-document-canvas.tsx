@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { ChevronLeft, ChevronRight, Maximize, Minus, Plus, PanelRightClose, PanelRightOpen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { reviewedBlockText, type ReviewField } from "@/lib/imported-contract-editing";
@@ -23,14 +23,14 @@ function PaperText({ blockId, value, label, disabled, onChange, onFocus }: {
     onChange={e => onChange(e.target.value.replace(/[\r\n\t]+/g, " "))} />;
 }
 
-export function ImportedDocumentCanvas({ blocks, fields, original, readOnly, busy, onChange, onDelete, renderOriginal, onSelect, onFocusBlock, panelOpen, onTogglePanel }: {
+export function ImportedDocumentCanvas({ viewport, blocks, fields, original, readOnly, busy, onChange, onDelete, renderOriginal, onSelect, onFocusBlock, panelOpen, onTogglePanel }: {
+  viewport: RefObject<HTMLDivElement | null>;
   blocks: Block[]; fields: ReviewField[]; original: boolean; readOnly: boolean; busy: boolean;
   onChange: (block: Block, value: string) => void; renderOriginal: (block: Block) => ReactNode;
   onDelete?: (block: Block) => void;
   onSelect: (block: Block, node: HTMLElement) => void; onFocusBlock: (id: string) => void;
   panelOpen: boolean; onTogglePanel: () => void;
 }) {
-  const viewport = useRef<HTMLDivElement>(null);
   const measure = useRef<HTMLDivElement>(null);
   const pendingCaret = useRef<{ id: string; start: number; end: number } | null>(null);
   const [groups, setGroups] = useState<{ ids: string[]; height: number }[]>([]);
@@ -67,7 +67,7 @@ export function ImportedDocumentCanvas({ blocks, fields, original, readOnly, bus
     const caret = pendingCaret.current; if (!caret) return;
     const node = Array.from(viewport.current?.querySelectorAll<HTMLTextAreaElement>("textarea[data-paper-block]") || []).find(n => n.dataset.paperBlock === caret.id);
     node?.focus({ preventScroll: true }); node?.setSelectionRange(caret.start, caret.end); pendingCaret.current = null;
-  }, [groups]);
+  }, [groups, viewport]);
   const renderedGroups = groups.length ? groups : [{ ids: visible.map(b => b.id), height: HEIGHT }];
   const pageCount = renderedGroups.length;
   const selectedPage = Math.min(currentPage, pageCount);
@@ -86,7 +86,7 @@ export function ImportedDocumentCanvas({ blocks, fields, original, readOnly, bus
     };
     root.addEventListener("scroll", track, { passive: true }); track();
     return () => root.removeEventListener("scroll", track);
-  }, [groups, zoom]);
+  }, [groups, viewport, zoom]);
   const paperStyle = { fontFamily: '"Times New Roman", serif', fontSize: 16, lineHeight: 1.7 };
   return <section className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-[#f1f2f7]">
     <div className="flex shrink-0 justify-center border-b border-slate-200 bg-[#f1f2f7] px-3 py-2">
@@ -104,7 +104,7 @@ export function ImportedDocumentCanvas({ blocks, fields, original, readOnly, bus
             {ids.map(id => {
               const block = blocks.find(b => b.id === id); if (!block) return null;
               const canEdit = !original && !readOnly && block.editable && block.text.length <= 10000;
-              return <div key={id} id={`source-${id}`} title={canEdit ? undefined : `${block.context}${block.editable ? "" : " · Vùng chỉ xem"}`}
+              return <div key={id} id={`source-${id}`} tabIndex={-1} title={canEdit ? undefined : `${block.context}${block.editable ? "" : " · Vùng chỉ xem"}`}
                 className={`relative mb-2 min-h-7 whitespace-pre-wrap break-words rounded-sm py-1 ${text(block) !== block.text ? "bg-amber-50/60 ring-1 ring-amber-300" : ""} ${!block.editable ? "bg-slate-50/60 ring-1 ring-slate-200" : ""} ${canEdit ? "hover:bg-sky-50/60 focus-within:bg-sky-50/40 focus-within:ring-1 focus-within:ring-sky-200" : ""}`}
                 data-block={id}>
                 {canEdit ? <><PaperText blockId={id} label={`Nội dung ${block.context} ${id}`} value={text(block)} disabled={busy} onFocus={() => onFocusBlock(id)} onChange={value => onChange(block, value)} />{onDelete && <Button type="button" size="icon" variant="ghost" className="absolute -right-9 top-1 size-7 rounded-md text-destructive hover:bg-destructive/10 hover:text-destructive" aria-label={`Xóa nội dung ${block.context} ${id}`} title="Xóa nội dung đoạn/ô" disabled={busy || !text(block)} onClick={() => onDelete(block)}><Trash2 className="size-3.5" /></Button>}</>

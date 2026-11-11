@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { FolderOpen, History, Undo2, Redo2, FileText, FileDown, Eye, Download, BookTemplate, Loader2, CheckCircle2, CircleDashed, Trash2, AlertTriangle } from "lucide-react";
+import { ArrowLeft, GitCompareArrows, FolderOpen, History, Undo2, Redo2, FileText, FileDown, Eye, Download, BookTemplate, Loader2, CheckCircle2, CircleDashed, Trash2, AlertTriangle } from "lucide-react";
 import { useAuthStore } from "@/hooks/use-auth-store";
 import { hasPermission } from "@/lib/rbac";
 import { prepareImportedTemplate, savePreparedTemplate, type PreparedImportedTemplate } from "@/services/imported-editor-template-api";
@@ -13,6 +13,7 @@ import { DocumentFindReplace, type FindOptions } from "@/components/contracts/do
 import { findTextMatches, replaceTextMatches } from "@/lib/document-find-replace";
 import { DocumentPdfPreview } from "@/components/contracts/document-pdf-preview";
 import { useReviewUndo } from "@/hooks/use-review-undo";
+import { usePreviewScrollReturn } from "@/hooks/use-preview-scroll-return";
 import { reviewedBlockText, replaceReviewedBlock, deleteReviewedFieldValue, type ReviewField } from "@/lib/imported-contract-editing";
 import { PermissionGuard } from "@/components/auth/permission-guard";
 import { RBAC_PERMISSIONS } from "@/lib/rbac";
@@ -94,9 +95,13 @@ function Review() {
   const [manualLabel, setManualLabel] = useState("Thông tin hợp đồng");
   const [pending, setPending] = useState<{ title: string; text: string; action: () => void; destructive?: boolean; confirmText?: string } | null>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
+  const compareButtonRef = useRef<HTMLButtonElement>(null);
+  const returnButtonRef = useRef<HTMLButtonElement>(null);
   const lock = useRef(false);
   useLayoutEffect(() => { sourceRef.current = source; }, [source]);
   const historical = !!source && source.revision !== source.currentRevision;
+  const canvasHidden = comparison || pdfMode;
+  const { viewportRef: editorViewportRef, capture: captureEditorPosition, clear: clearEditorPosition } = usePreviewScrollReturn<HTMLDivElement>(canvasHidden, source?.id);
   const date = (text: string) => new Date(text.endsWith("Z") ? text : `${text}Z`).toLocaleString("vi-VN");
 
   useEffect(() => {
@@ -120,7 +125,7 @@ function Review() {
   const open = async (id: string, revision?: number) => {
     if (lock.current) return;
     lock.current = true; setBusy(true); setError("");
-    try { const data = await axiosClient.get<unknown, Source>(`${base}/${id}`, { params: { revision } }); sourceRef.current = data; setSource(data); edits.reset(data.fields); setPdfMode(false); setSaveError(""); setLastSaved(""); setDirty(false); setConflict(false); setActive(""); setFieldQuery(""); setFieldStatus("all"); setFieldGroup(""); setComparison(false); setRecoveryOffer(null); setRecoveryNotice(""); setSelected(null); setPreview(true); setListOpen(false); setHistoryOpen(false);
+    try { const data = await axiosClient.get<unknown, Source>(`${base}/${id}`, { params: { revision } }); clearEditorPosition(); sourceRef.current = data; setSource(data); edits.reset(data.fields); setPdfMode(false); setSaveError(""); setLastSaved(""); setDirty(false); setConflict(false); setActive(""); setFieldQuery(""); setFieldStatus("all"); setFieldGroup(""); setComparison(false); setRecoveryOffer(null); setRecoveryNotice(""); setSelected(null); setPreview(true); setListOpen(false); setHistoryOpen(false);
       if (owner && data.revision === data.currentRevision) { try { setRecoveryOffer(await readReviewRecovery(owner, id)); } catch { setRecoveryNotice("Không đọc được bản dự phòng trên trình duyệt này."); } }
     }
     catch (e) { setError(getApiErrorMessage(e, "Không mở được hợp đồng cũ.")); }
@@ -255,6 +260,37 @@ function Review() {
       if (scrollSource) document.getElementById(`source-${field.blockId}`)?.scrollIntoView({ block: "center", behavior: "smooth" });
     });
   };
+  const startComparison = () => {
+    if (!pdfMode) captureEditorPosition();
+    setPdfMode(false);
+    setComparison(true);
+    requestAnimationFrame(() => returnButtonRef.current?.focus({ preventScroll: true }));
+  };
+  const togglePdfPreview = () => {
+    if (pdfMode) {
+      setPdfMode(false);
+      return;
+    }
+    captureEditorPosition();
+    setPdfMode(true);
+  };
+  const returnToDocument = (blockId?: string) => {
+    setComparison(false);
+    setPdfMode(false);
+    setPreview(true);
+    setSelected(null);
+    const field = blockId ? fields.find(f => f.blockId === blockId) : undefined;
+    if (field) focus(field, false);
+    requestAnimationFrame(() => {
+      const block = blockId ? document.getElementById(`source-${blockId}`) : null;
+      if (block) {
+        block.scrollIntoView({ block: "center", behavior: "instant" });
+        block.focus({ preventScroll: true });
+      } else {
+        compareButtonRef.current?.focus({ preventScroll: true });
+      }
+    });
+  };
   const visibleFields = fields.filter(f => (fieldStatus === "all" || f.status === fieldStatus) && (!fieldGroup || reviewGroup(f) === fieldGroup) &&
     `${f.label} ${f.party} ${f.original} ${f.value}`.toLocaleLowerCase("vi-VN").includes(fieldQuery.toLocaleLowerCase("vi-VN"))).sort((a, b) => reviewGroup(a).localeCompare(reviewGroup(b), "vi-VN"));
   const templateItems = source?.fields || [];
@@ -372,22 +408,46 @@ function Review() {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
     {!source ? <div className="m-6 flex min-h-0 flex-1 flex-col items-center justify-center rounded-xl border-2 border-dashed bg-card/60 p-6 text-center sm:p-12"><h2 className="text-xl font-semibold">Kéo DOCX vào đây hoặc chọn Upload DOCX</h2><p className="mt-3 text-muted-foreground">Tối đa 10 MB. Giữ bản gốc, nhận diện dữ liệu theo vị trí, không cần placeholder. Đây là rà soát tài liệu, chưa tạo hoặc thay đổi hồ sơ hợp đồng nghiệp vụ.</p><Button className="mt-6 h-12 px-8" disabled={busy || saving} onClick={() => uploadRef.current?.click()}>Upload DOCX</Button></div> : <>
       <Dialog open={infoOpen} onOpenChange={setInfoOpen}><DialogContent className="document-workspace-ui sm:max-w-2xl"><DialogHeader><DialogTitle className="break-all">{source.name} · v{source.revision}</DialogTitle><DialogDescription>Thông tin tài liệu và giới hạn chỉnh sửa. File gốc được giữ nguyên.</DialogDescription></DialogHeader><div className="max-h-[65dvh] space-y-2 overflow-y-auto pt-3"><p className="font-semibold text-foreground">{source.name} · v{source.revision} {dirty ? "· Chưa lưu" : "· Đã lưu"}</p><p>File gốc: {(source.sizeBytes / 1024).toLocaleString("vi-VN", { maximumFractionDigits: 1 })} KB · Nhập lúc {date(source.createdAtUtc)} · Được giữ nguyên, không ghi đè</p><p>{source.warning}</p><p>Đã đọc {source.blocks.filter(b => b.text.trim()).length} đoạn/ô có văn bản · {source.blocks.filter(b => !b.editable && b.text.trim()).length} vùng chỉ xem · {fields.length} trường đang rà soát. Nhận diện theo nhãn, không phải AI/OCR; kết quả có thể thiếu hoặc sai.</p>{fields.length >= 500 && <p className="text-amber-700 dark:text-amber-400">Đã đạt giới hạn 500 trường. Một số dữ liệu có thể chưa được đưa vào danh sách.</p>}<p className="break-all">SHA-256 gốc: {source.sourceSha256}</p>{historical && <div className="flex flex-wrap items-center gap-3 text-primary"><span>Đang xem bản cũ, chỉ đọc.</span><Button size="sm" disabled={busy} onClick={() => setPending({ title: "Khôi phục phiên bản này?", text: "Giữ toàn bộ lịch sử và lưu bản đang xem thành phiên bản mới.", action: () => void restore() })}>Khôi phục thành bản mới</Button><Button size="sm" variant="outline" disabled={busy} onClick={() => void open(source.id)}>Mở bản mới nhất</Button></div>}</div></DialogContent></Dialog>
-      <div className="relative flex min-h-0 flex-1 overflow-hidden">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <div className="flex shrink-0 flex-wrap items-center gap-1 border-b bg-card px-3 py-1.5 [&_button]:h-8 [&_button]:rounded-lg">
+          <div className="flex shrink-0 flex-wrap items-center gap-1 border-b bg-card px-3 py-1.5 [&_button]:min-h-8 [&_button]:rounded-lg">
+            {comparison && (
+              <Button ref={returnButtonRef} type="button" size="sm" className="mr-2 h-10" onClick={() => returnToDocument()}>
+                <ArrowLeft aria-hidden className="size-4" /> {historical || recoveryOffer ? "Quay lại tài liệu" : "Quay lại chỉnh sửa"}
+              </Button>
+            )}
             <Button size="sm" variant="ghost" className="mr-1 max-w-[240px] gap-2" title={source.name} onClick={() => setInfoOpen(true)}><FileText className="size-4 shrink-0" /><span className="truncate">{source.name}</span><span className="shrink-0 text-muted-foreground">v{source.revision}</span></Button>
             {!saveError && !historical && <span role="status" title={lastSaved ? `Lưu lúc ${lastSaved}` : undefined} className="mr-2 inline-flex items-center gap-1.5 whitespace-nowrap border-r pr-3 text-sm text-muted-foreground">{saving ? <Loader2 className="size-3.5 animate-spin" /> : dirty ? <CircleDashed className="size-3.5 text-amber-600" /> : <CheckCircle2 className="size-3.5 text-emerald-600" />}{saving ? "Đang lưu" : dirty ? "Chưa lưu" : "Đã lưu"}</span>}
           {!comparison && <DocumentFindReplace compact value={find} onChange={value => { setFind(value); setFindIndex(0); }} count={findResults.length} index={currentFindIndex} onNavigate={navigateFind} onReplace={replaceFound} disabled={historical || busy || !!recoveryOffer} note="Tìm trong các đoạn/ô có thể chỉnh sửa; không thay vùng chỉ đọc, ảnh hoặc header/footer. Thay tất cả có thể hoàn tác một lần bằng Ctrl+Z." />}
-            <Button size="sm" title="Đặt bản gốc và bản đang sửa cạnh nhau" variant={comparison ? "secondary" : "ghost"} onClick={() => { setComparison(v => !v); setPdfMode(false); }}> {comparison ? "Chỉnh sửa" : "Đối chiếu"}</Button>
+            {comparison ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
+                <GitCompareArrows aria-hidden className="size-3.5" /> Đang đối chiếu
+              </span>
+            ) : (
+              <Button ref={compareButtonRef} type="button" size="sm" title="Đặt bản gốc và bản đang sửa cạnh nhau" variant="ghost" onClick={startComparison}>
+                <GitCompareArrows aria-hidden className="size-4" /> Đối chiếu
+              </Button>
+            )}
             <Button size="sm" variant={panelOpen ? "secondary" : "ghost"} aria-expanded={panelOpen} onClick={() => setPanelOpen(value => !value)}>Rà soát ({fields.length})</Button>
             {!comparison && <><Button size="sm" variant="ghost" onClick={() => { setSelected(null); setPdfMode(false); setPreview(value => !value); }}>{preview ? "Gán vùng" : "Chỉnh sửa"}</Button>
-            <Button size="sm" variant={pdfMode ? "secondary" : "ghost"} disabled={busy || saving || (dirty && !pdfMode)} onClick={() => setPdfMode(v => !v)}>{pdfMode ? "Đóng PDF" : "PDF"}</Button></>}
+            <Button type="button" size="sm" variant={pdfMode ? "secondary" : "ghost"} disabled={!pdfMode && (busy || saving || dirty)}
+              title={pdfMode ? "Quay lại vị trí trước khi mở PDF" : "Xem bản PDF trong không gian tài liệu"}
+              onClick={togglePdfPreview}>{pdfMode ? "Đóng PDF" : "PDF"}</Button></>}
             {historical && <Button size="sm" disabled={busy} onClick={() => setPending({ title: "Khôi phục phiên bản này?", text: "Tạo phiên bản mới từ bản đang xem, không xóa lịch sử.", action: () => void restore() })}>Khôi phục bản này</Button>}
           </div>
-          {comparison ? <ImportedReviewComparison id={source.id} revision={source.revision} blocks={source.blocks} fields={fields} dirty={dirty} readOnly={historical || busy || !!recoveryOffer} onFocus={id => { setComparison(false); const field = fields.find(f => f.blockId === id); if (field) focus(field); else requestAnimationFrame(() => document.getElementById(`source-${id}`)?.scrollIntoView({ block: "center", behavior: "smooth" })); }} onRestore={id => setPending({ title: "Khôi phục đoạn gốc?", text: "Bỏ các thay đổi của đoạn này trong bản đang sửa. File gốc và lịch sử server không bị xóa.", action: () => setFields(previous => previous.map(f => f.blockId === id ? { ...f, value: f.original, status: "proposed" } : f)) })} /> : pdfMode ? <DocumentPdfPreview key={`${source.id}:${source.revision}`} kind="imported" id={source.id} revision={source.revision} /> : <ImportedDocumentCanvas blocks={source.blocks} fields={fields} original={!preview} readOnly={historical || !!recoveryOffer} busy={busy}
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          {comparison ? <ImportedReviewComparison id={source.id} revision={source.revision} blocks={source.blocks} fields={fields} dirty={dirty} readOnly={historical || busy || !!recoveryOffer}
+            onBack={() => returnToDocument()} backLabel={historical || recoveryOffer ? "Tiếp tục xem tài liệu" : "Tiếp tục chỉnh sửa"}
+            onFocus={returnToDocument}
+            onRestore={id => setPending({ title: "Khôi phục đoạn gốc?", text: "Bỏ các thay đổi của đoạn này trong bản đang sửa. File gốc và lịch sử server không bị xóa.", action: () => setFields(previous => previous.map(f => f.blockId === id ? { ...f, value: f.original, status: "proposed" } : f)) })}
+          /> : pdfMode ? <DocumentPdfPreview key={`${source.id}:${source.revision}`} kind="imported" id={source.id} revision={source.revision} /> : null}
+          {/* Keep the canvas laid out so returning preserves its scroll and zoom. */}
+          <div key={historical ? `${source.id}:${source.revision}` : source.id} inert={canvasHidden} aria-hidden={canvasHidden || undefined}
+            className={canvasHidden ? "pointer-events-none invisible absolute inset-0 flex min-w-0 flex-col" : "flex min-h-0 min-w-0 flex-1 flex-col"}>
+            <ImportedDocumentCanvas viewport={editorViewportRef} blocks={source.blocks} fields={fields} original={!preview} readOnly={historical || !!recoveryOffer} busy={busy}
             onChange={editBlock} onDelete={requestDeleteBlock} renderOriginal={renderText} onSelect={capture}
             onFocusBlock={id => { const field = fields.find(f => f.blockId === id); if (field) setActive(field.id); }}
-            panelOpen={panelOpen} onTogglePanel={() => setPanelOpen(value => !value)} />}
+            panelOpen={panelOpen} onTogglePanel={() => setPanelOpen(value => !value)} />
+          </div>
         </div>
         <aside className={`${panelOpen ? "block" : "hidden"} absolute inset-y-0 right-0 z-20 w-[min(360px,90vw)] shrink-0 space-y-4 overflow-y-auto border-l bg-card p-4 shadow-xl lg:static lg:w-[288px] lg:shadow-none xl:w-[324px]`}><div className="flex justify-end lg:hidden"><Button size="sm" variant="ghost" onClick={() => setPanelOpen(false)}>Đóng dữ liệu</Button></div><h2 className="font-semibold">Dữ liệu cần rà soát ({fields.length})</h2><p className="text-xs text-muted-foreground">Nhập giá trị thay thế sẽ áp dụng ngay trên văn bản và tự lưu. Gợi ý nhận diện chưa chỉnh vẫn cần Xác nhận để áp dụng. Bên A/B là ngữ cảnh gợi ý, hãy kiểm tra lại; không suy ra khách hàng chỉ từ ký hiệu bên.</p>
           <div className="space-y-3 rounded-xl border bg-muted/20 p-3">
@@ -422,7 +482,7 @@ function Review() {
     </>}
       </div>
     </div>
-    <Dialog open={recoveryPreview && !!recoveryOffer} onOpenChange={setRecoveryPreview}><DialogContent className="flex h-[85vh] max-w-[95vw] flex-col sm:max-w-5xl"><DialogHeader><DialogTitle>Bản dự phòng so với file gốc</DialogTitle><DialogDescription>Chỉ đối chiếu; không tự ghi đè phiên bản server hiện tại.</DialogDescription></DialogHeader>{source && recoveryOffer && <ImportedReviewComparison id={source.id} revision={source.revision} blocks={source.blocks} fields={recoveryOffer.fields} dirty readOnly onRestore={() => {}} onFocus={() => {}} />}</DialogContent></Dialog>
+    <Dialog open={recoveryPreview && !!recoveryOffer} onOpenChange={setRecoveryPreview}><DialogContent className="flex h-[85vh] max-w-[95vw] flex-col sm:max-w-5xl"><DialogHeader><DialogTitle>Bản dự phòng so với file gốc</DialogTitle><DialogDescription>Chỉ đối chiếu; không tự ghi đè phiên bản server hiện tại.</DialogDescription></DialogHeader>{source && recoveryOffer && <ImportedReviewComparison id={source.id} revision={source.revision} blocks={source.blocks} fields={recoveryOffer.fields} dirty readOnly />}</DialogContent></Dialog>
     <Dialog open={listOpen} onOpenChange={setListOpen}><DialogContent className="max-h-[80vh] overflow-y-auto"><DialogHeader><DialogTitle>Hồ sơ hợp đồng cũ của tôi</DialogTitle><DialogDescription>Chỉ tài khoản và tenant hiện tại được truy cập.</DialogDescription></DialogHeader><Input aria-label="Tìm hồ sơ nhập" value={query} onChange={e => { setQuery(e.target.value); setPage(1); }} placeholder="Tìm tên file..." />{list.map(item => <Button variant="outline" key={item.id} disabled={busy} className="h-auto justify-start whitespace-normal text-left" onClick={() => confirmLeave(() => void open(item.id))}><span className="flex min-w-0 flex-col gap-1"><span>{item.name} · v{item.revision}</span><span className="text-xs font-normal text-muted-foreground">{(item.sizeBytes / 1024).toLocaleString("vi-VN", { maximumFractionDigits: 1 })} KB · {date(item.createdAtUtc)}</span></span></Button>)}{!list.length && <p>Chưa có hồ sơ.</p>}<div className="flex items-center justify-end gap-3"><Button variant="ghost" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Trước</Button><span>{page}/{pages}</span><Button variant="ghost" disabled={page >= pages} onClick={() => setPage(p => p + 1)}>Sau</Button></div></DialogContent></Dialog>
     <Dialog open={historyOpen} onOpenChange={setHistoryOpen}><DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl"><DialogHeader><DialogTitle>Lịch sử rà soát</DialogTitle><DialogDescription>Chọn bản để xem hoặc xuất. Khôi phục luôn tạo bản mới, không xóa hay ghi đè lịch sử.</DialogDescription></DialogHeader>
       <div className="space-y-2">{history.map(item => <button type="button" disabled={busy} key={item.revision} className="w-full space-y-2 rounded-xl border p-3 text-left transition-colors hover:border-primary hover:bg-primary/5 disabled:opacity-50" onClick={() => source && confirmLeave(() => void open(source.id, item.revision))}>
