@@ -5,3 +5,6 @@ DTC_DigitizingContract_Codex_Handoff.md
 # Bỏ qua cache Visual Studio ở mọi thư mục
 **/.vs/
 .idea
+
+# Bỏ qua metadata build .NET sinh tự động, kể cả khi chạy EF sai thư mục.
+**/obj/
