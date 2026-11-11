@@ -211,6 +211,9 @@ namespace ContractManagement.Infrastructure.Migrations.Application
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
 
+                    b.Property<string>("BusinessReviewSnapshot")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<int>("ContractId")
                         .HasColumnType("int");
 

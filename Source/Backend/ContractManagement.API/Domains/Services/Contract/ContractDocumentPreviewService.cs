@@ -112,9 +112,14 @@ public sealed class ContractDocumentPreviewService :
     }
 
     public async Task<string> CaptureEditorBindingHashAsync(int contractId, int employeeId, CancellationToken ct = default)
+        => (await CaptureEditorBindingAsync(contractId, employeeId, ct)).BusinessHash;
+
+    public async Task<ContractEditorBindingCapture> CaptureEditorBindingAsync(int contractId, int employeeId, CancellationToken ct = default)
     {
         var rendered = await RenderDocxAsync(contractId, employeeId, false, ct, snapshotOnly: true);
-        return ContractEditorBindingPolicy.BusinessFingerprint(rendered.Snapshot, employeeId);
+        return new(rendered.Snapshot.Version.VersionId,
+            ContractEditorBindingPolicy.BusinessFingerprint(rendered.Snapshot, rendered.ResponsibleEmployeeId),
+            ContractEditorBindingReview.Capture(rendered.Snapshot, rendered.ResponsibleEmployeeId));
     }
 
     private async Task<RenderedContractDocx> RenderDocxAsync(
@@ -294,7 +299,7 @@ public sealed class ContractDocumentPreviewService :
                 var pinned = await _dbContext.Set<ContractVersionEditorDocument>().AsNoTracking().SingleOrDefaultAsync(x => x.VersionId == versionId && x.ContractId == contractId, cancellationToken);
                 bytes = ContractEditorBindingPolicy.RequireDocument(version, pinned, ContractEditorBindingPolicy.BusinessFingerprint(currentSnapshot, contract.EmployeeId));
             }
-            return new RenderedContractDocx(bytes, SafeFileName(currentSnapshot.Contract.ContractCode, contractId), currentSnapshot, templateVersionId);
+            return new RenderedContractDocx(bytes, SafeFileName(currentSnapshot.Contract.ContractCode, contractId), currentSnapshot, templateVersionId, contract.EmployeeId);
         }
         var source = await ReadTemplateSourceAsync(
             template!.Version,
@@ -308,7 +313,7 @@ public sealed class ContractDocumentPreviewService :
             renderedDocx,
             SafeFileName(snapshot.Contract.ContractCode, contractId),
             snapshot,
-            templateVersionId);
+            templateVersionId, contract.EmployeeId);
     }
 
     private static void EnsurePreviewPolicy(TblContract contract)
@@ -598,7 +603,8 @@ public sealed class ContractDocumentPreviewService :
         byte[] Content,
         string SafeContractCode,
         SoftwareSupplyContractSnapshot Snapshot,
-        int TemplateVersionId);
+        int TemplateVersionId,
+        int ResponsibleEmployeeId);
 }
 
 internal static class VietnameseMoneyTextFormatter

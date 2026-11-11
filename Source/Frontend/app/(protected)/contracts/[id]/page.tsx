@@ -174,6 +174,7 @@ export default function ContractDetailPage() {
   const saveInFlightRef = useRef(false);
   const [isStartingNegotiation, setIsStartingNegotiation] = useState(false);
   const [isSubmittingApproval, setIsSubmittingApproval] = useState(false);
+  const [wordReviewRequiredKey, setWordReviewRequiredKey] = useState<string | null>(null);
   const [isOpeningPdf, setIsOpeningPdf] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [isDownloadingDocx, setIsDownloadingDocx] = useState(false);
@@ -787,6 +788,11 @@ export default function ContractDetailPage() {
       toast.error("Vui lòng lưu các thay đổi trước khi gửi duyệt.");
       return;
     }
+    if (requiresWordReview) {
+      document.getElementById("official-word-review")?.focus();
+      toast.info("Rà soát và cập nhật bản Word trước khi gửi duyệt.");
+      return;
+    }
     if (!canSubmitApproval) {
       toast.error(
         effectiveApprovalBlockers[0]?.message ||
@@ -874,6 +880,8 @@ export default function ContractDetailPage() {
       : activeTab;
   const effectiveApprovalBlockers = contract.approvalReadiness.blockers;
   const canSubmitApproval = contract.approvalReadiness.canSubmit;
+  const wordReviewKey = `${contract.contractId}:${contract.currentVersion.versionId}:${contract.rowVersion}:${contract.currentVersion.rowVersion}`;
+  const requiresWordReview = wordReviewRequiredKey === wordReviewKey;
   const isCurrentVersionShared = contract.approvalReadiness.hasEverBeenShared;
   const hasActiveCurrentVersionLink =
     contract.approvalReadiness.hasActiveCurrentVersionLink;
@@ -973,7 +981,7 @@ export default function ContractDetailPage() {
       <Header />
 
       <div className="min-h-0 grow space-y-6 overflow-y-auto p-3 sm:p-6 lg:p-10">
-        <ContractVersionDocument contractId={contract.contractId} versionId={contract.currentVersion.versionId} refreshKey={contract.rowVersion} />
+        <ContractVersionDocument key={`${contract.contractId}:${contract.currentVersion.versionId}`} contractId={contract.contractId} versionId={contract.currentVersion.versionId} refreshKey={wordReviewKey} canBind={hasPermission(user?.permissions, RBAC_PERMISSIONS.contractCreate)} onReviewRequired={setWordReviewRequiredKey} />
         {[ContractStatus.PendingSignature, ContractStatus.Signed, ContractStatus.Completed].includes(contract.status) && <AdministrativeTextEditor target="contract" id={contract.contractId} onSaved={() => void fetchContractDetail(false)} />}
         {contract.hasAdministrativeTextEdits && <p className="rounded-xl border border-amber-400 bg-amber-50 p-4 text-sm text-amber-950">Căn cứ/điều khoản đã được chỉnh sửa trực tiếp sau duyệt/ký. Nội dung trên màn hình có thể khác bản Word/PDF đã duyệt/ký; các file và snapshot gốc vẫn được giữ nguyên.</p>}
         {!!contract.outcome && <section className="rounded-xl border border-primary/30 bg-primary/5 p-4"><h2 className="font-semibold">Kết quả xử lý: {getContractOutcomeLabel(contract.outcome)}</h2><p className="mt-1 text-sm text-muted-foreground">Kết quả hành chính được lưu riêng; lịch sử duyệt/ký và chứng từ vẫn được giữ nguyên.</p>{contract.outcomeReason && <p className="mt-2 whitespace-pre-wrap">{contract.outcomeReason}</p>}</section>}
@@ -1082,9 +1090,9 @@ export default function ContractDetailPage() {
                     isUpdating ||
                     appendixOperationBusy ||
                     hasAnyUnsavedChanges ||
-                    !canSubmitApproval
+                    (!requiresWordReview && !canSubmitApproval)
                   }
-                  title={effectiveApprovalBlockers[0]?.message}
+                  title={requiresWordReview ? "Cần rà soát bản Word trước khi gửi duyệt" : effectiveApprovalBlockers[0]?.message}
                   className="bg-amber-600 hover:bg-amber-700 text-white"
                 >
                   {isSubmittingApproval ? (
@@ -1092,7 +1100,7 @@ export default function ContractDetailPage() {
                   ) : (
                     <Send className="size-4 mr-2" />
                   )}
-                  Gửi duyệt
+                  {requiresWordReview ? "Cần rà soát Word" : "Gửi duyệt"}
                 </Button>
               )}
             {/* <Button variant="outline">

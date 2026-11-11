@@ -72,13 +72,13 @@ public sealed partial class ContractServiceSlice04Tests
         : ContractManagement.Domains.Interfaces.Contract.IContractEditorBindingFingerprint
     {
         public int OwnerId;
-        public async Task<string> CaptureEditorBindingHashAsync(int id, int employeeId, CancellationToken ct = default)
+        public async Task<ContractManagement.Domains.Interfaces.Contract.ContractEditorBindingCapture> CaptureEditorBindingAsync(int id, int employeeId, CancellationToken ct = default)
         {
             OwnerId = employeeId;
             var contract = await db.TblContracts.AsNoTracking().SingleAsync(x => x.ContractId == id, ct);
             Assert.NotNull(contract.CurrentVersionId);
             Assert.NotEmpty(await db.TblContractItems.Where(x => x.ContractId == id).ToListAsync(ct));
-            return new string('A', 64);
+            return new(contract.CurrentVersionId!.Value, new string('A', 64), "[]");
         }
     }
 

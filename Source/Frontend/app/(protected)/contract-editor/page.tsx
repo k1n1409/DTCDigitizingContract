@@ -35,7 +35,7 @@ import { DocumentPdfPreviewDialog, type PdfPreviewDocument } from "@/components/
 import { usePreviewScrollReturn } from "@/hooks/use-preview-scroll-return";
 import { EditorSnippetsPanel } from "@/components/contracts/editor-snippets-panel";
 import { DocumentLayoutDialog } from "@/components/contracts/document-layout-dialog";
-import { EditorContractBindingDialog } from "@/components/contracts/editor-contract-binding-dialog";
+import { EditorContractBindingDialog, type EditorBindingTarget } from "@/components/contracts/editor-contract-binding-dialog";
 import { checkEditorDocument } from "@/lib/document-preflight";
 import { DEFAULT_DOCUMENT_LAYOUT, documentPageSize } from "@/lib/contract-rich-text";
 import { LayoutTemplate, FilePlus2 } from "lucide-react";
@@ -72,6 +72,7 @@ function EditorContent() {
   const [bindings, setBindings] = useState<Record<string, string>>({});
   const [draftDialog, setDraftDialog] = useState<"list" | "history" | "templates" | null>(null);
   const [bindingDocument, setBindingDocument] = useState<{ id: string; revision: number } | null>(null);
+  const [bindingTarget, setBindingTarget] = useState<EditorBindingTarget | null>(null);
   const [templateConfirm, setTemplateConfirm] = useState(false);
   const [sharedTemplate, setSharedTemplate] = useState(false);
   const [templateAcknowledged, setTemplateAcknowledged] = useState(false);
@@ -98,12 +99,16 @@ function EditorContent() {
     setDocumentEpoch(epoch => epoch + 1);
     setContent(value.content); setTitle(value.title); setBindings(value.bindings || {}); setFields([]); setWarning("");
   };
-  const server = useEditorServerDraft({ title, content, bindings }, dirty, setDirty, applySnapshot, busy || pending !== null || templateConfirm || layoutOpen);
+  const server = useEditorServerDraft({ title, content, bindings }, dirty, setDirty, applySnapshot, busy || pending !== null || templateConfirm || layoutOpen || bindingDocument !== null);
   const libraryEntryOpened = useRef(false);
   useEffect(() => {
     if (libraryEntryOpened.current) return;
     libraryEntryOpened.current = true;
     const params = new URLSearchParams(window.location.search);
+    const contractId = Number(params.get("bindContract"));
+    const versionId = Number(params.get("bindVersion"));
+    if (Number.isSafeInteger(contractId) && contractId > 0 && Number.isSafeInteger(versionId) && versionId > 0)
+      setBindingTarget({ contractId, versionId });
     const templateId = params.get("template");
     const documentId = params.get("document");
     const id = templateId || documentId;
@@ -248,9 +253,13 @@ function EditorContent() {
     <div className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-background px-4 py-2 [&>button]:border-slate-300 dark:[&>button]:border-slate-600">
       <Button variant="outline" disabled={locked} onClick={() => setLayoutOpen(true)}><LayoutTemplate className="mr-2 size-4" />Bố cục trang</Button>
       <Button variant="outline" disabled={locked || !content} onClick={() => void prepareContract()}><FilePlus2 className="mr-2 size-4" />Tạo hợp đồng từ tài liệu này</Button>
-      <Button variant="outline" disabled={locked || !content} onClick={() => { if (!ensureDocumentReady()) return; void server.save().then(saved => { if (saved) setBindingDocument({ id: saved.id, revision: saved.revision }); else toast.error("Chưa lưu được bản đang soạn, chưa thể cập nhật hợp đồng."); }); }}><Save className="mr-2 size-4" />Cập nhật tài liệu cho hợp đồng đã có</Button>
+      <Button variant={bindingTarget ? "default" : "outline"} disabled={locked || !content || (!!bindingTarget && !server.identity && !dirty)} onClick={() => { if (!ensureDocumentReady()) return; void server.save().then(saved => { if (saved) setBindingDocument({ id: saved.id, revision: saved.revision }); else toast.error("Chưa lưu được bản đang soạn, chưa thể cập nhật hợp đồng."); }); }}><Save className="mr-2 size-4" />{bindingTarget ? "Rà soát và gắn bản Word" : "Cập nhật tài liệu cho hợp đồng đã có"}</Button>
       <Button variant="outline" disabled={locked} onClick={() => confirmReplace(() => { server.detach(); applySnapshot({ title: "Hợp đồng mới", content: "", bindings: {} }); setDirty(false); })}><Plus className="mr-2 size-4" />Tài liệu trắng</Button>
     </div>
+    {bindingTarget && <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b bg-primary/5 px-4 py-2 text-sm">
+      <span>Chỉnh bản Word theo dữ liệu hợp đồng, sau đó chọn <strong>Rà soát và gắn bản Word</strong> để xác nhận.</span>
+      <Button size="sm" variant="link" onClick={() => confirmReplace(() => router.push(`/contracts/${bindingTarget.contractId}#overview`))}>Về chi tiết hợp đồng</Button>
+    </div>}
     <DocumentWorkspaceStatus state={server.error ? "error" : server.saving ? "saving" : dirty || !server.identity ? "unsaved" : "saved"}>{server.error ? <><span>{server.error} Thay đổi chưa được lưu lên server.</span><Button size="sm" variant="outline" disabled={locked} onClick={() => void server.save()}>Thử lưu lại</Button></> : server.saving ? "Đang lưu — bạn có thể tiếp tục soạn thảo." : dirty ? "Có thay đổi mới · Tự lưu sau 2 giây ngừng nhập." : server.identity ? `Đã lưu trên server · phiên bản ${server.identity.revision}` : "Tài liệu mới · Bắt đầu soạn hoặc chọn một mẫu trong thư viện."}</DocumentWorkspaceStatus>
     {server.identity?.isTemplate && <p className="border-b bg-primary/5 px-4 py-2 text-sm text-primary">Đang sửa {server.identity.isSharedTemplate ? "mẫu dùng chung trong tenant" : "mẫu cá nhân — chỉ bạn truy cập được"}. Lưu server tạo phiên bản mới; không sửa tài liệu đã tạo từ mẫu.</p>}
     <input hidden type="file" accept=".docx" ref={uploadRef} onChange={e => { void importFile(e.target.files?.[0]); e.target.value = ""; }} />
@@ -292,7 +301,7 @@ function EditorContent() {
     <ConfirmDialog isOpen={templateConfirm} onClose={() => setTemplateConfirm(false)} title="Lưu thành mẫu văn bản" description={<div className="space-y-4"><p>Giá trị liên kết được xóa để điền lại khi dùng mẫu. Văn bản gõ trực tiếp vẫn được giữ nguyên.</p><TemplatePrivacyOptions shared={sharedTemplate} onChange={setSharedTemplate} canShare={canManageTemplates} acknowledged={templateAcknowledged} onAcknowledge={setTemplateAcknowledged} /></div>} confirmDisabled={!templateAcknowledged} confirmText="Tạo mẫu văn bản" onConfirm={() => { if (!templateAcknowledged) return; setTemplateConfirm(false); void server.saveAsTemplate(sharedTemplate).then(ok => { if (ok) { setSideTab("blocks"); toast.success("Đã tạo mẫu trong thư viện."); } }); }} />
     <DocumentPdfPreviewDialog preview={pdfPreview} onClose={() => setPdfPreview(null)} returnFocusRef={pdfButtonRef} closeLabel="Quay lại soạn thảo" />
     <DocumentLayoutDialog key={`${layoutOpen}-${JSON.stringify(documentModel.layout)}`} open={layoutOpen} value={documentModel.layout} preserved={!!documentModel.preservation} onClose={() => setLayoutOpen(false)} onApply={layout => { update(serializeContractRichText({ ...documentModel, layout })); setLayoutOpen(false); }} />
-    <EditorContractBindingDialog key={bindingDocument ? `${bindingDocument.id}-${bindingDocument.revision}` : "closed"} document={bindingDocument} onClose={() => setBindingDocument(null)} />
+    <EditorContractBindingDialog key={bindingDocument ? `${bindingDocument.id}-${bindingDocument.revision}` : "closed"} document={bindingDocument} target={bindingTarget} onClose={() => setBindingDocument(null)} onBound={bindingTarget ? ({ contractId }) => router.push(`/contracts/${contractId}#overview`) : undefined} />
   </main>;
 }
 export default function ContractEditorPage() { return <PermissionGuard permission={RBAC_PERMISSIONS.contractCreate}><EditorContent /></PermissionGuard>; }

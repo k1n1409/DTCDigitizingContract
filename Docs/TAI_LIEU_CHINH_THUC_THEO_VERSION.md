@@ -25,6 +25,8 @@
 
 Sửa/xóa bản nháp trong thư viện không thay byte DOCX đã ghim. Không thể ghim lại version đã gửi duyệt/đã khóa. Không tự fallback về template nếu thiếu, lỗi hash hoặc tài liệu không khớp dữ liệu nghiệp vụ.
 
+**Đối chiếu sai lệch:** Mục **Tài liệu Word chính thức** trên chi tiết hợp đồng hiển thị giá trị lúc gắn và hiện tại cho các trường được hỗ trợ, ví dụ đơn giá, số lượng, đối tác, ngày và đợt thanh toán. Nếu nội dung điều khoản đổi, hệ thống đánh dấu để kiểm tra trong Word thay vì suy luận nội dung hai bên có giống nhau. Chọn **Rà soát và cập nhật bản Word** để mở editor với đúng hợp đồng/phiên bản; chỉnh và xem thử, rồi bấm **Rà soát và gắn bản Word**. Các bản gắn trước migration `ContractEditorBindingReview` chỉ có hash, nên chưa có giá trị cũ để đối chiếu đến khi gắn lại.
+
 ## 3. Phạm vi và giới hạn
 
 - Triển khai cho loại **Cung cấp phần mềm**, phù hợp renderer/luồng gửi duyệt hiện tại. Template vẫn dùng để tạo cấu trúc nghiệp vụ, không bị bỏ qua các kiểm tra sẵn có.

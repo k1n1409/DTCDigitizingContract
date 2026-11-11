@@ -40,6 +40,7 @@ public sealed class ContractVersionEditorDocument
     public string Title { get; set; } = "";
     public string DocxHash { get; set; } = "";
     public string BusinessHash { get; set; } = "";
+    public string? BusinessReviewSnapshot { get; set; }
     public byte[] Docx { get; set; } = [];
     public int BoundByEmployeeId { get; set; }
     public DateTime BoundAtUtc { get; set; }

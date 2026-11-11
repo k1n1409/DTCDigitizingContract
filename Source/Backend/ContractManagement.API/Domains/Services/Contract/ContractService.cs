@@ -1109,14 +1109,17 @@ namespace ContractManagement.Domains.Services.Contract
                         // All aggregate rows now exist inside this transaction. Capture the
                         // exact same fingerprint the official renderer checks at submission.
                         var capture = _editorBindingFingerprint ?? (IContractEditorBindingFingerprint)_submissionArtifactRenderer!;
-                        var businessHash = await capture.CaptureEditorBindingHashAsync(contract.ContractId, responsibleEmployeeId);
+                        var binding = await capture.CaptureEditorBindingAsync(contract.ContractId, responsibleEmployeeId);
+                        if (binding.VersionId != contractVersion.VersionId)
+                            throw new InvalidOperationException("Không xác định được đúng phiên bản để ghim tài liệu.");
                         var docxHash = Convert.ToHexString(SHA256.HashData(officialDocx));
                         contractVersion.DocumentMode = 1;
                         _dbContext.Add(new ContractVersionEditorDocument {
                             ContractId = contract.ContractId, VersionId = contractVersion.VersionId,
                             EditorDocumentId = request.EditorSourceDocumentId!.Value,
                             EditorRevision = request.EditorSourceRevision!.Value, Title = request.EditorSourceTitle!,
-                            Docx = officialDocx.ToArray(), DocxHash = docxHash, BusinessHash = businessHash,
+                            Docx = officialDocx.ToArray(), DocxHash = docxHash, BusinessHash = binding.BusinessHash,
+                            BusinessReviewSnapshot = binding.ReviewSnapshot,
                             BoundByEmployeeId = createdEmployeeId, BoundAtUtc = now
                         });
                         _contractAuditWriter.StageEmployeeAudits([new EmployeeContractAuditWriteRequest(

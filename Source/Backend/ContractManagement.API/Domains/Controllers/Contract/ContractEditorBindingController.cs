@@ -30,6 +30,7 @@ public sealed class ContractEditorBindingController(DbDtctechContext db, ICurren
         [Range(1, int.MaxValue)] public int Revision { get; set; }
         [Required] public byte[] ContractRowVersion { get; set; } = [];
         [Required] public byte[] VersionRowVersion { get; set; } = [];
+        [StringLength(64, MinimumLength = 64)] public string? ReviewedBusinessHash { get; set; }
         public bool Reviewed { get; set; }
     }
 
@@ -40,21 +41,47 @@ public sealed class ContractEditorBindingController(DbDtctechContext db, ICurren
         await authorization.EnsureCanReadAsync(contractId, Actor, ct);
         var version = await db.TblContractVersions.AsNoTracking().SingleOrDefaultAsync(x => x.VersionId == versionId && x.ContractId == contractId, ct);
         if (version is null) return NotFound();
-        var pin = await db.Set<ContractVersionEditorDocument>().AsNoTracking().Where(x => x.VersionId == versionId)
-            .Select(x => new { x.EditorDocumentId, x.EditorRevision, x.Title, x.DocxHash, x.BoundAtUtc }).SingleOrDefaultAsync(ct);
+        var stored = await db.Set<ContractVersionEditorDocument>().AsNoTracking().Where(x => x.VersionId == versionId && x.ContractId == contractId)
+            .Select(x => new { x.EditorDocumentId, x.EditorRevision, x.Title, x.DocxHash, x.BoundAtUtc, x.BusinessHash, x.BusinessReviewSnapshot }).SingleOrDefaultAsync(ct);
+        var pin = stored is null ? null : new { stored.EditorDocumentId, stored.EditorRevision, stored.Title, stored.DocxHash, stored.BoundAtUtc };
         bool? matchesBusinessData = null;
-        if (pin is not null && !version.IsLocked && await db.TblContracts.AnyAsync(x => x.ContractId == contractId && x.CurrentVersionId == versionId && (x.Status == 0 || x.Status == 1), ct))
+        string? currentBusinessHash = null;
+        Guid? editableDocumentId = null;
+        ContractEditorBindingReview.Difference? difference = null;
+        if (!version.IsLocked && await db.TblContracts.AnyAsync(x => x.ContractId == contractId && x.CurrentVersionId == versionId && (x.Status == 0 || x.Status == 1), ct))
         {
-            // Hash capture is a write-scope operation. Readers still see pin metadata,
-            // but cannot use this endpoint to render another owner's mutable content.
             try
             {
-                var hash = await preview.CaptureEditorBindingHashAsync(contractId, Actor, ct);
-                matchesBusinessData = await db.Set<ContractVersionEditorDocument>().AnyAsync(x => x.VersionId == versionId && x.BusinessHash == hash, ct);
+                // With no pin the dialog requests a capture explicitly so ordinary template details
+                // don't pay for a snapshot they won't use.
+                if (version.DocumentMode == 1 || Request.Query.ContainsKey("review"))
+                {
+                    var capture = await preview.CaptureEditorBindingAsync(contractId, Actor, ct);
+                    if (capture.VersionId == versionId)
+                    {
+                        currentBusinessHash = capture.BusinessHash;
+                        if (stored is not null)
+                        {
+                            matchesBusinessData = stored.BusinessHash == capture.BusinessHash;
+                            if (matchesBusinessData == false)
+                                difference = ContractEditorBindingReview.Compare(stored.BusinessReviewSnapshot, capture.ReviewSnapshot);
+                        }
+                    }
+                }
+                var sourceId = stored?.EditorDocumentId ?? (version.DocumentMode == 1
+                    ? await db.TblContracts.Where(x => x.ContractId == contractId).Select(x => x.EditorSourceDocumentId).SingleAsync(ct)
+                    : null);
+                if (currentBusinessHash is not null && sourceId is Guid id)
+                {
+                    var tenantId = tenant.GetRequiredTenant().TenantId;
+                    if (await db.Set<ContractEditorDocument>().AnyAsync(x => x.Id == id && x.TenantId == tenantId && !x.IsArchived
+                        && (x.EmployeeId == Actor || (x.IsTemplate && x.IsSharedTemplate)), ct))
+                        editableDocumentId = id;
+                }
             }
             catch (RbacOperationException) { }
         }
-        return Ok(ApiResponse<object>.Ok(new { version.DocumentMode, version.IsLocked, pin, matchesBusinessData }));
+        return Ok(ApiResponse<object>.Ok(new { version.DocumentMode, version.IsLocked, pin, matchesBusinessData, difference, editableDocumentId, currentBusinessHash }));
     }
 
     [HttpPost, SessionAuthorize(RbacPermissions.ContractCreate)]
@@ -90,12 +117,15 @@ public sealed class ContractEditorBindingController(DbDtctechContext db, ICurren
             foreach (var pair in new[] { ("SOURCE_CUSTOMER_ID", contract.CustomerId), ("SOURCE_EMPLOYEE_ID", contract.EmployeeId) })
                 if (bindings.TryGetValue(pair.Item1, out var value) && (!int.TryParse(value, out var selected) || selected != pair.Item2))
                     return BadRequest(ApiResponse<object>.Fail("Khách hàng/nhân viên của tài liệu không khớp hợp đồng. Cập nhật nguồn dữ liệu trước."));
-            var businessHash = await preview.CaptureEditorBindingHashAsync(contractId, Actor, ct);
+            var binding = await preview.CaptureEditorBindingAsync(contractId, Actor, ct);
+            if (binding.VersionId != versionId || (request.ReviewedBusinessHash is not null && request.ReviewedBusinessHash != binding.BusinessHash))
+                return Conflict(ApiResponse<object>.Fail("Dữ liệu hợp đồng vừa thay đổi. Mở lại phần rà soát và xác nhận trước khi cập nhật Word."));
             var pin = await db.Set<ContractVersionEditorDocument>().SingleOrDefaultAsync(x => x.VersionId == versionId, ct);
             if (pin is null) { pin = new() { VersionId = versionId, ContractId = contractId }; db.Add(pin); }
             pin.EditorDocumentId = source.Id; pin.EditorRevision = revision.Revision; pin.Title = revision.Title;
             pin.Docx = file.FileContents; pin.DocxHash = Convert.ToHexString(SHA256.HashData(file.FileContents));
-            pin.BusinessHash = businessHash; pin.BoundByEmployeeId = Actor; pin.BoundAtUtc = DateTime.UtcNow;
+            pin.BusinessHash = binding.BusinessHash; pin.BusinessReviewSnapshot = binding.ReviewSnapshot;
+            pin.BoundByEmployeeId = Actor; pin.BoundAtUtc = DateTime.UtcNow;
             version.DocumentMode = 1;
             db.Entry(version).Property(x => x.DocumentMode).IsModified = true;
             contract.UpdateDate = DateTime.UtcNow; contract.UpdatedEmployeeId = Actor;

@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using ContractManagement.API.Common.Enums;
 using ContractManagement.Domains.Services.Contract;
 using ContractManagement.Infrastructure.Persistence.Application.Models;
@@ -59,6 +60,47 @@ public sealed partial class ContractDocumentPreviewServiceTests
         db.Add(new ContractEditorRevision { DocumentId = id, Revision = 1, Title = "Reviewed document", Content = RichText("Nội dung chính thức đã rà soát") });
         await db.SaveChangesAsync();
         return id;
+    }
+
+    [Fact]
+    public async Task BindingReview_ExplainsPriceAndTermChanges_AndRejectsStaleConfirmation()
+    {
+        await using var db = CreateContext();
+        var source = CreateSourceDocument();
+        await SeedAsync(db, source);
+        var id = await SeedBindingDraft(db);
+        var api = BindingApi(db, source);
+        var contract = await db.TblContracts.SingleAsync();
+        var version = await db.TblContractVersions.SingleAsync();
+        var request = new ContractEditorBindingController.BindRequest { DocumentId = id, Revision = 1, Reviewed = true,
+            ContractRowVersion = contract.RowVersion, VersionRowVersion = version.RowVersion };
+        Assert.IsType<OkObjectResult>(await api.Bind(ContractId, VersionId, request, default));
+        var originalHash = (await db.Set<ContractVersionEditorDocument>().SingleAsync()).BusinessHash;
+
+        (await db.TblContractItems.SingleAsync()).UnitPrice = 900m;
+        (await db.TblContractTerms.SingleAsync()).TermContent = RichText("Nội dung điều khoản đã đổi.");
+        await db.SaveChangesAsync();
+
+        var result = Assert.IsType<OkObjectResult>(await api.Read(ContractId, VersionId, default));
+        var body = JsonSerializer.SerializeToElement(result.Value, new JsonSerializerOptions(JsonSerializerDefaults.Web)).GetProperty("data");
+        Assert.False(body.GetProperty("matchesBusinessData").GetBoolean());
+        var changes = body.GetProperty("difference").GetProperty("changes").EnumerateArray().ToArray();
+        var price = Assert.Single(changes, row => row.GetProperty("field").GetString() == "Đơn giá");
+        Assert.Equal("1.000 USD", price.GetProperty("before").GetString());
+        Assert.Equal("900 USD", price.GetProperty("after").GetString());
+        var term = Assert.Single(changes, row => row.GetProperty("group").GetString() == "Điều khoản");
+        Assert.True(term.GetProperty("needsWordReview").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, term.GetProperty("after").ValueKind);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => CreateService(db, source).RenderAsync(ContractId, OwnerId));
+
+        request.ReviewedBusinessHash = originalHash;
+        Assert.IsType<ConflictObjectResult>(await api.Bind(ContractId, VersionId, request, default));
+        Assert.Equal(originalHash, (await db.Set<ContractVersionEditorDocument>().SingleAsync()).BusinessHash);
+
+        request.ReviewedBusinessHash = body.GetProperty("currentBusinessHash").GetString();
+        Assert.IsType<OkObjectResult>(await api.Bind(ContractId, VersionId, request, default));
+        Assert.NotEqual(originalHash, (await db.Set<ContractVersionEditorDocument>().SingleAsync()).BusinessHash);
+        Assert.NotEmpty((await CreateService(db, source).RenderAsync(ContractId, OwnerId)).DocxContent);
     }
 
     [Fact]
